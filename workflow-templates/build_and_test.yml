@@ -1,4 +1,4 @@
-name: Build and Test Tender Document Generator
+name: Build and Test SVTECH App
 
 on:
   push:
