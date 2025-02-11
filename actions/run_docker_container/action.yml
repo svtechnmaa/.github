@@ -1,0 +1,54 @@
+name: 'Run and wait for docker container to be running'
+description: 'Run container from an existing Docker image and wait for container to be running'
+inputs:
+  imageName: 
+    description: 'Docker image to start your container'
+    required: true
+  containerName: 
+    description: 'Name of the container after you start using the docker image above'
+    required: true
+  containerMappingPort:
+    description: 'Port mapping for your container'
+    required: true
+    default: '80:80'
+  timeout:
+    description: 'The limit time (seconds) for waiting the container to be running, otherwise cancel the workflow'
+    required: true
+    default: '300' # 5 minutes
+  interval:
+    description: Wait for interval (seconds) before checking container status again'
+    required: true
+    default: '3'
+runs:
+  using: "composite"
+  steps:
+  - name: Run Tender app
+    shell: bash
+    run: |
+      docker run -d --name $CONTAINER_NAME -p $CONTAINER_MAPPING_PORT $IMAGE_NAME
+    env:
+      IMAGE_NAME: ${{ inputs.imageName }}
+      CONTAINER_NAME: ${{ inputs.containerName }}
+      CONTAINER_MAPPING_PORT: ${{ inputs.containerMappingPort }}
+
+  - name: Wait for container to be running
+    shell: bash
+    run: |
+      elapsed=0
+      while true; do
+        status=$(docker inspect --format '{{.State.Status}}' $CONTAINER_NAME)
+        if [ "$status" == "running" ]; then
+          echo "Container $CONTAINER_NAME is running"
+          break
+        fi
+        if [ $elapsed -ge $TIMEOUT ]; then
+          echo "Timeout reached: Container $CONTAINER_NAME did not start successfully"
+          exit 1
+        fi
+        sleep $INTERVAL
+        elapsed=$((elapsed + INTERVAL))
+      done
+    env:
+      TIMEOUT: ${{ inputs.timeout }}
+      INTERVAL: ${{ inputs.interval }}
+      CONTAINER_NAME: ${{ inputs.containerName }}
