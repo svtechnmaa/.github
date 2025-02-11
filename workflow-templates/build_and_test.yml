@@ -37,7 +37,7 @@ jobs:
 
     - id: run_and_check_container_status
       name: Run App
-      uses: ${{ github.repository_owner }}/.github/actions/run_docker_container@main
+      uses: svtechnmaa/.github/actions/run_docker_container@main
       with:
         imageName: '${{ env.IMAGE_NAME }}'
         containerName: '${{ env.CONTAINER_NAME }}'
@@ -87,7 +87,7 @@ jobs:
 
       - id: run_and_check_container_status
         name: Run App
-        uses: ${{ github.repository_owner }}/.github/actions/run_docker_container@main
+        uses: svtechnmaa/.github/actions/run_docker_container@main
         with:
           imageName: 'ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }}'
           containerName: '${{ env.CONTAINER_NAME }}'
