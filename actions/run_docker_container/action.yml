@@ -37,6 +37,7 @@ runs:
       elapsed=0
       while true; do
         status=$(docker inspect --format '{{.State.Status}}' $CONTAINER_NAME)
+        echo "Container current status: $status"
         if [ "$status" == "running" ]; then
           echo "Container $CONTAINER_NAME is running"
           break
