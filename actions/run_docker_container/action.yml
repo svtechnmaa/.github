@@ -42,6 +42,10 @@ runs:
           echo "Container $CONTAINER_NAME is running"
           break
         fi
+        if [ "$status" == "exited" ]; then
+          echo "Container $CONTAINER_NAME is exited"
+          exit 1
+        fi
         if [ $elapsed -ge $TIMEOUT ]; then
           echo "Timeout reached: Container $CONTAINER_NAME did not start successfully"
           exit 1
