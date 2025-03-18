@@ -1,0 +1,79 @@
+name: Scan Dockerfile and Image
+
+on:
+  push:
+    branches: [ $default-branch ]
+  pull_request:
+    branches: [ $default-branch ]
+
+jobs:
+  scan:
+    runs-on: robot-dind
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Restore Trivy Cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.cache/trivy
+        key: trivy-cache-${{ runner.os }}
+        restore-keys: |
+          trivy-cache-${{ runner.os }}
+
+    - name: Scan Dockerfile 
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        severity: 'CRITICAL,HIGH'
+        cache: true
+        format: 'table'
+        output: 'dockerfile_scanning_result.json'
+  
+    - name: Downcase REPO
+      run: |
+        echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+
+    - name: Build image
+      run: |
+        docker buildx build \
+          --cache-from=type=registry,ref=ghcr.io/${{ env.REPO }}:cache \
+          --load \
+          --tag bngblaster-app:latest .
+
+    - name: Scan Docker image
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'image'
+        scan-ref: 'bngblaster-app:latest'
+        severity: 'CRITICAL,HIGH'
+        cache: true
+        format: 'table'
+        output: 'image_scanning_result.json'
+
+    - name: Show results for Dockerfile scanning
+      run: |
+        echo "##[command] Show results for Dockerfile scanning"
+        cat dockerfile_scanning_result.json
+
+    - name: Show results for Image scanning
+      run: |
+        echo "##[command] Show results for Image scanning"
+        cat image_scanning_result.json
+
+    - name: Upload Dockerfile scan results as artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Dockerfile scanning result
+        path: dockerfile_scanning_result.json
+        
+    - name: Upload Image scanning results as artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Image scanning result
+        path: image_scanning_result.json
+        

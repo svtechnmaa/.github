@@ -23,8 +23,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Build Docker image
-      run: docker build --build-arg git_token=${{ secrets.GITHUB_TOKEN }} --build-arg CACHEBUST=$(date +%s) --build-arg BRANCH=main --build-arg OWNER=${{ github.repository_owner }} -t ${{ env.IMAGE_NAME }} .
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build image
+      run: |
+        docker buildx build --platform linux/amd64 \
+          --cache-from=type=registry,ref=ghcr.io/${{ env.REPO }}:cache \
+          --load \
+          --tag ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }} .
 
     - id: run_and_check_container_status
       name: Run App
@@ -45,10 +52,13 @@ jobs:
         username: '${{ github.repository_owner }}'
         password: '${{ secrets.GITHUB_TOKEN }}'
         
-    - name: Push image to GitHub Container Registry
+    - name: Build and push image to ghcr.io
       run: |
-        docker tag ${{ env.IMAGE_NAME }}:latest ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }}
-        docker push ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }}
+        docker buildx build --platform linux/amd64 \
+          --cache-from=type=registry,ref=ghcr.io/${{ env.REPO }}:cache \
+          --cache-to=type=registry,ref=ghcr.io/${{ env.REPO }}:cache,mode=max \
+          --push \
+          --tag ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }} . 
 
   test: 
     needs: build
@@ -108,7 +118,8 @@ jobs:
             ./log.html
             ./report.html
 
-      - name: Push latest image to GitHub Container Registry
+      - name: Tag latest image and push to GitHub Container Registry
+        if: success()
         run: |
-          docker tag ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }} ghcr.io/${{ env.REPO }}:latest
-          docker push ghcr.io/${{ env.REPO }}:latest
+          docker buildx imagetools create -t ghcr.io/${{ env.REPO }}:latest ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }}
+          docker buildx imagetools inspect ghcr.io/${{ env.REPO }}:${{ env.IMAGE_TAG }}
