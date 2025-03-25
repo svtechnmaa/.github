@@ -48,7 +48,7 @@ jobs:
         server_address: smtp.gmail.com
         server_port: 465
         secure: true
-        username: ${{secrets.MAIL_USERNAME}}
+        username: ${{vars.MAIL_USERNAME}}
         password: ${{secrets.MAIL_PASSWORD}}
         subject: "[ALERT] Vulnerabilities Found in Dockerfile"
         body: |
@@ -96,7 +96,7 @@ jobs:
         server_address: smtp.gmail.com
         server_port: 465
         secure: true
-        username: ${{secrets.MAIL_USERNAME}}
+        username: ${{vars.MAIL_USERNAME}}
         password: ${{secrets.MAIL_PASSWORD}}
         subject: "[ALERT] Vulnerabilities Found in Docker Image"
         body: |
