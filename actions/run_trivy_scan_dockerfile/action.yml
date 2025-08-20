@@ -32,6 +32,7 @@ runs:
 
     - name: Scan Dockerfile
       id: scan_dockerfile
+      shell: bash
       run: |
         echo "Scanning Dockerfile..."
         # Scan Dockerfile, export SARIF
@@ -58,6 +59,7 @@ runs:
       continue-on-error: true
 
     - name: Show results for Dockerfile scanning
+      shell: bash
       run: |
         echo "##[command] Show results for Dockerfile scanning"
         cat dockerfile_scanning_result.txt
