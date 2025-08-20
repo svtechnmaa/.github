@@ -38,31 +38,29 @@ runs:
         # Scan Dockerfile, export SARIF
         trivy config --severity HIGH,CRITICAL --format sarif --output trivy-report.sarif ${{ inputs.dockerfile_path }}
 
-        # Generate text summary for log
-        jq -r '.runs[].results[] | "\(.ruleId): \(.level)"' trivy-report.sarif > dockerfile_scanning_result.txt
+        # Parse SARIF và tạo text summary cho log
+        echo "Detected HIGH/CRITICAL vulnerabilities:"
+        jq -r '
+          .runs[].results[]
+          | select(.properties.tags[]? == "HIGH" or .properties.tags[]? == "CRITICAL")
+          | "Rule: \(.ruleId)\nSeverity: \(.properties."security-severity")\nFile: \(.locations[0].physicalLocation.artifactLocation.uri)\nLine: \(.locations[0].physicalLocation.region.startLine)\nMessage: \(.message.text | split("\n")[4])\nLink: \(.message.text | capture("Link: \\[(?<link>.*)\\]") | .link)\n----------------------"
+        ' trivy-report.sarif
 
-        # Count HIGH + CRITICAL
-        HIGH_COUNT=$(jq '[.runs[].results[] | select(.level=="high")] | length' trivy-report.sarif)
-        CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level=="critical")] | length' trivy-report.sarif)
+        # Count HIGH + CRITICAL based on tags
+        HIGH_COUNT=$(jq '[.runs[].results[] | select(.properties.tags[]?=="HIGH")] | length' trivy-report.sarif)
+        CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.properties.tags[]?=="CRITICAL")] | length' trivy-report.sarif)
         TOTAL_VULNS=$((HIGH_COUNT + CRITICAL_COUNT))
 
         echo "HIGH vulnerabilities: $HIGH_COUNT"
         echo "CRITICAL vulnerabilities: $CRITICAL_COUNT"
         echo "TOTAL vulnerabilities: $TOTAL_VULNS"
 
-        # Set output to trigger mail
+        # Set output to trigger mail if any HIGH/CRITICAL found
         if [ "$TOTAL_VULNS" -gt 0 ]; then
           echo "detected_vulns=true" >> $GITHUB_OUTPUT
         else
           echo "detected_vulns=false" >> $GITHUB_OUTPUT
         fi
-      continue-on-error: true
-
-    - name: Show results for Dockerfile scanning
-      shell: bash
-      run: |
-        echo "##[command] Show results for Dockerfile scanning"
-        cat dockerfile_scanning_result.txt
       continue-on-error: true
 
     - name: Upload SARIF to Security tab
