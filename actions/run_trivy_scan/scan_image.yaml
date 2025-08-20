@@ -1,0 +1,91 @@
+name: Docker Image Scan and Mail
+description: Scan Docker image with Trivy, show results, and send mail if HIGH/CRITICAL vulnerabilities detected
+
+inputs:
+  image_name:
+    description: "Docker image name to scan"
+    required: true
+  trivy_server:
+    description: "Trivy server URL (if using server mode)"
+    required: false
+    default: ""
+  mail_username:
+    description: "SMTP username for sending email"
+    required: true
+  mail_password:
+    description: "SMTP password for sending email"
+    required: true
+  commit_author_name:
+    description: "Name of commit author to include in email"
+    required: true
+  commit_author_email:
+    description: "Email of commit author to include in email"
+    required: true
+  commit_id:
+    description: "Commit ID associated with this scan"
+    required: true
+  job_id:
+    description: "GitHub job ID for the current workflow run"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Scan Docker image
+      id: scan_docker_image
+      run: |
+        echo "🔍 Checking Trivy server availability..."
+        if curl -s --fail ${{ inputs.trivy_server }}/healthz; then
+          echo "✅ Trivy server is UP"
+          trivy image --server ${{ inputs.trivy_server }} --timeout 8m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:latest
+        else
+          echo "⚠️ Trivy server is DOWN. Falling back to local scan"
+          trivy image --timeout 8m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:latest
+        fi
+
+        jq -r '.runs[].results[] | "\(.ruleId): \(.level)"' trivy-image-report.sarif > image_scanning_result.txt
+
+        HIGH_COUNT=$(jq '[.runs[].results[] | select(.level=="high")] | length' trivy-image-report.sarif)
+        CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level=="critical")] | length' trivy-image-report.sarif)
+        TOTAL_VULNS=$((HIGH_COUNT + CRITICAL_COUNT))
+        if [ "$TOTAL_VULNS" -gt 0 ]; then
+          echo "detected_vulns=true" >> $GITHUB_OUTPUT
+        else
+          echo "detected_vulns=false" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
+
+    - name: Show results for Image scanning
+      run: |
+        echo "##[command] Show results for Image scanning"
+        cat image_scanning_result.txt
+      continue-on-error: true
+
+    - name: Send mail if vulnerabilities detected
+      if: steps.scan_docker_image.outputs.detected_vulns == 'true'
+      uses: dawidd6/action-send-mail@v4
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        secure: true
+        username: ${{ inputs.mail_username }}
+        password: ${{ inputs.mail_password }}
+        subject: "[ALERT] Vulnerabilities Found in Docker Image"
+        body: |
+          Hello ${{ inputs.commit_author_name }},
+
+          Detected vulnerabilities for commit:
+          ${{ github.server_url }}/${{ github.repository }}/commit/${{ inputs.commit_id }}
+
+          View the full report here:
+          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${ inputs.job_id }
+
+          Please review the details and take appropriate action.
+
+          Best,
+          SRE Team
+        to: ${{ inputs.commit_author_email }}
+        from: kien.kim@svtech.com.vn
