@@ -36,32 +36,30 @@ runs:
       run: |
         echo "Scanning Dockerfile..."
         # Scan Dockerfile, export SARIF
-        trivy config --severity HIGH,CRITICAL --format sarif --output trivy-report.sarif ${{ inputs.dockerfile_path }}
+        trivy config --severity HIGH,CRITICAL --format sarif --output trivy-report.sarif ./Dockerfile
 
+        # If there is at least one HIGH or CRITICAL, then set detected_vulns
+        if jq -e 'any(.runs[].tool.driver.rules[]; (.properties.tags // []) | index("HIGH") or index("CRITICAL"))' trivy-report.sarif > /dev/null; then
+          echo "detected_vulns=true" >> "$GITHUB_OUTPUT"
+        fi
+      continue-on-error: true 
+
+    - name: Logging detected vulnerabilities
+      shell: bash
+      if: steps.scan_dockerfile.conclusion == 'success'
+      run: |
         # Parse SARIF và tạo text summary cho log
         echo "Detected HIGH/CRITICAL vulnerabilities:"
-        jq -r '
-          .runs[].results[]
-          | select(.properties.tags[]? == "HIGH" or .properties.tags[]? == "CRITICAL")
-          | "Rule: \(.ruleId)\nSeverity: \(.properties."security-severity")\nFile: \(.locations[0].physicalLocation.artifactLocation.uri)\nLine: \(.locations[0].physicalLocation.region.startLine)\nMessage: \(.message.text | split("\n")[4])\nLink: \(.message.text | capture("Link: \\[(?<link>.*)\\]") | .link)\n----------------------"
+        jq -r '.runs[].tool.driver.rules[]
+          | select(.properties.tags | index("HIGH") or index("CRITICAL")) 
+          |"
+        RuleId: \(.id)
+        Severity: \((.properties.tags[] | select(. == "HIGH" or . == "CRITICAL")))
+        Score: \(.properties."security-severity")
+        Reference: \(.helpUri)
+        Message: \(.fullDescription.text)
+        -----"
         ' trivy-report.sarif
-
-        # Count HIGH + CRITICAL based on tags
-        HIGH_COUNT=$(jq '[.runs[].results[] | select(.properties.tags[]?=="HIGH")] | length' trivy-report.sarif)
-        CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.properties.tags[]?=="CRITICAL")] | length' trivy-report.sarif)
-        TOTAL_VULNS=$((HIGH_COUNT + CRITICAL_COUNT))
-
-        echo "HIGH vulnerabilities: $HIGH_COUNT"
-        echo "CRITICAL vulnerabilities: $CRITICAL_COUNT"
-        echo "TOTAL vulnerabilities: $TOTAL_VULNS"
-
-        # Set output to trigger mail if any HIGH/CRITICAL found
-        if [ "$TOTAL_VULNS" -gt 0 ]; then
-          echo "detected_vulns=true" >> $GITHUB_OUTPUT
-        else
-          echo "detected_vulns=false" >> $GITHUB_OUTPUT
-        fi
-      continue-on-error: true
 
     - name: Upload SARIF to Security tab
       uses: github/codeql-action/upload-sarif@v3
@@ -86,7 +84,12 @@ runs:
           ${{ github.server_url }}/${{ github.repository }}/commit/${{ inputs.commit_id }}
 
           View the full report here:
-          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${ inputs.job_id }
+
+          ${{ github.server_url }}/${{ github.repository }}/security/code-scanning
+
+          or
+
+          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${ inputs.job_id }          
 
           Please review the details and take appropriate action.
 
