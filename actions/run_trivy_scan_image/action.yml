@@ -5,6 +5,10 @@ inputs:
   image_name:
     description: "Docker image name to scan"
     required: true
+  image_tag:
+    description: "Docker image tag to scan"
+    required: false
+    default: "latest"
   trivy_server:
     description: "Trivy server URL (if using server mode)"
     required: false
@@ -41,10 +45,10 @@ runs:
         echo "🔍 Checking Trivy server availability..."
         if curl -s --fail ${{ inputs.trivy_server }}/healthz; then
           echo "✅ Trivy server is UP"
-          trivy image --server ${{ inputs.trivy_server }} --timeout 8m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:latest
+          trivy image --server ${{ inputs.trivy_server }} --timeout 5m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:${{ inputs.image_tag }}
         else
           echo "⚠️ Trivy server is DOWN. Falling back to local scan"
-          trivy image --timeout 8m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:latest
+          trivy image --timeout 5m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:${{ inputs.image_tag }}
         fi
 
         # If there is at least one HIGH or CRITICAL, then set detected_vulns
