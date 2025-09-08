@@ -40,7 +40,6 @@ runs:
 
     - name: Scan Docker image
       shell: bash
-      id: scan_docker_image
       run: |
         echo "🔍 Checking Trivy server availability..."
         if curl -s --fail ${{ inputs.trivy_server }}/healthz; then
@@ -50,21 +49,14 @@ runs:
           echo "⚠️ Trivy server is DOWN. Falling back to local scan"
           trivy image --timeout 5m --severity HIGH,CRITICAL --format sarif --output trivy-image-report.sarif ${{ inputs.image_name }}:${{ inputs.image_tag }}
         fi
-
-        # If there is at least one HIGH or CRITICAL, then set detected_vulns
-        if jq -e 'any(.runs[].tool.driver.rules[]; (.properties.tags // []) | index("HIGH") or index("CRITICAL"))' trivy-image-report.sarif > /dev/null; then
-          echo "detected_vulns=true" >> "$GITHUB_OUTPUT"
-        fi
       continue-on-error: true
 
     - name: Logging detected vulnerabilities
+      id: logging_vulns
       shell: bash
       if: steps.scan_docker_image.conclusion == 'success'
       run: |
-        # Parse SARIF và tạo text summary cho log
-        echo "Detected HIGH/CRITICAL vulnerabilities:"
-
-        jq -r '.runs[].tool.driver.rules[]
+        issues=$(jq -r '.runs[].tool.driver.rules[]
           | select(.properties.tags | index("HIGH") or index("CRITICAL")) 
           |"
         RuleId: \(.id)
@@ -73,18 +65,27 @@ runs:
         Reference: \(.helpUri)
         Message: \(.shortDescription.text)
         -----"
-        ' trivy-image-report.sarif
+        ' trivy-image-report.sarif)
+
+        if [[ -z "$issues" ]]; then
+          echo "✅ No HIGH/CRITICAL vulnerabilities detected"
+          echo "detected_vulns=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "🚨 Detected HIGH/CRITICAL vulnerabilities:"
+          echo "$issues"
+          echo "detected_vulns=true" >> "$GITHUB_OUTPUT"
+        fi
       continue-on-error: true
 
     - name: Upload SARIF to Security tab
-      if: steps.scan_docker_image.outputs.detected_vulns == 'true'
+      if: steps.logging_vulns.outputs.detected_vulns == 'true'
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: trivy-image-report.sarif
       continue-on-error: true
 
     - name: Send mail if vulnerabilities detected
-      if: steps.scan_docker_image.outputs.detected_vulns == 'true'
+      if: steps.logging_vulns.outputs.detected_vulns == 'true'
       uses: dawidd6/action-send-mail@v4
       with:
         server_address: smtp.gmail.com
