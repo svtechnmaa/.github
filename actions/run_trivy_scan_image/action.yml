@@ -83,6 +83,7 @@ runs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: trivy-image-report.sarif
+        category: trivy-docker-image
       continue-on-error: true
 
     - name: Send mail if vulnerabilities detected
