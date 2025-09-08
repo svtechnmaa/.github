@@ -39,6 +39,7 @@ runs:
       uses: actions/checkout@v4
 
     - name: Scan Docker image
+      id: scan_docker_image
       shell: bash
       run: |
         echo "🔍 Checking Trivy server availability..."
