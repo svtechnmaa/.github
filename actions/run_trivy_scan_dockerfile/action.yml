@@ -15,8 +15,8 @@ inputs:
   commit_author_name:
     description: "Name of the commit author to include in email"
     required: true
-  commit_author_email:
-    description: "Email of the commit author to include in email"
+  mail_receivers:
+    description: "Mail addesses of additional recipients (comma-separated)"
     required: true
   commit_id:
     description: "Git commit ID associated with this scan"
@@ -109,6 +109,6 @@ runs:
 
           Best,
           SRE Team
-        to: ${{ inputs.commit_author_email }}
+        to: ${{ inputs.mail_receivers }}
         from: ${{ inputs.mail_username }}
       continue-on-error: true
