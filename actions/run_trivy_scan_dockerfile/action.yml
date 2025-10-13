@@ -16,7 +16,7 @@ inputs:
     description: "Name of the commit author to include in email"
     required: true
   mail_receivers:
-    description: "Mail addesses of additional recipients (comma-separated)"
+    description: "Mail addesses of recipients"
     required: true
   commit_id:
     description: "Git commit ID associated with this scan"
