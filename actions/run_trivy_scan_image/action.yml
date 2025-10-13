@@ -83,9 +83,9 @@ runs:
       shell: bash
       run: |
         if [ "${{ github.event.repository.private }}" = "true" ]; then
-          echo "determine_scan_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ inputs.job_id }}" >> $GITHUB_ENV
+          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ inputs.job_id }}" >> $GITHUB_ENV
         else
-          echo "determine_scan_url=${{ github.server_url }}/${{ github.repository }}/security/code-scanning" >> $GITHUB_ENV
+          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/security/code-scanning" >> $GITHUB_ENV
         fi
       continue-on-error: true
 
@@ -115,7 +115,7 @@ runs:
 
           View the full report here:
 
-          ${{ env.determine_scan_url }}         
+          ${{ env.scan_report_url }}         
 
           Please review the details and take appropriate action.
 
