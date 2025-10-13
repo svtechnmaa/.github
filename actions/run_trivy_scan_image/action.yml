@@ -114,6 +114,6 @@ runs:
 
           Best,
           SRE Team
-        to: ${{ inputs.commit_author_email }}
-        from: kien.kim@svtech.com.vn
+        to: ${{ inputs.commit_author_email }},${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+        from: ${{ inputs.mail_username || vars.MAIL_USERNAME }}
       continue-on-error: true
