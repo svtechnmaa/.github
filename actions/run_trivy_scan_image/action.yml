@@ -25,6 +25,9 @@ inputs:
   commit_author_email:
     description: "Email of commit author to include in email"
     required: true
+  sre_team_email:
+    description: "Email address of the SRE team to include in email"
+    required: true
   commit_id:
     description: "Commit ID associated with this scan"
     required: true
@@ -114,6 +117,6 @@ runs:
 
           Best,
           SRE Team
-        to: ${{ inputs.commit_author_email }}
-        from: kien.kim@svtech.com.vn
+        to: ${{ inputs.commit_author_email }},${{ inputs.sre_team_email }}
+        from: ${{ inputs.mail_username }}
       continue-on-error: true
