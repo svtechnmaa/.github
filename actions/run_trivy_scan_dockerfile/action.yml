@@ -85,6 +85,23 @@ runs:
         category: trivy-dockerfile
       continue-on-error: true
 
+    - name: Clean noreply mail receivers
+      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      shell: bash
+      run: |
+        RAW="${{ inputs.mail_receivers }}"
+
+        # Remove noreply.github.com emails
+        CLEAN=$(echo "$RAW" | tr ',' '\n' | grep -v 'noreply.github.com' | tr '\n' ',' | sed 's/,$//')
+
+        # Fallback: if all receivers were removed
+        if [ -z "$CLEAN" ]; then
+          CLEAN="${{ inputs.mail_username }}"
+        fi
+
+        echo "MAIL_RECEIVERS=$CLEAN" >> $GITHUB_ENV
+      continue-on-error: true
+
     - name: Send mail if vulnerabilities detected
       if: steps.logging_vulns.outputs.detected_vulns == 'true'
       uses: dawidd6/action-send-mail@v4
@@ -96,19 +113,28 @@ runs:
         password: ${{ inputs.mail_password }}
         subject: "[ALERT] Vulnerabilities Found in Dockerfile"
         body: |
-          Hello ${{ inputs.commit_author_name }},
+          🚨 Dockerfile Vulnerability Alert
 
-          Detected vulnerabilities for commit:
-          ${{ github.server_url }}/${{ github.repository }}/commit/${{ inputs.commit_id }}
+          Dockerfile:
+            - Path: ${{ inputs.dockerfile_path }}
 
-          View the full report here:
+          Severity:
+            - HIGH / CRITICAL vulnerabilities detected
 
-          ${{ env.scan_report_url }}         
+          Commit:
+            - Author: ${{ inputs.commit_author_name }}
+            - Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ inputs.commit_id }}
 
-          Please review the details and take appropriate action.
+          Report:
+            ${{ env.scan_report_url }}
 
-          Best,
-          SRE Team
+          Action required:
+            - Update base image (FROM ...)
+            - Upgrade vulnerable packages
+            - Re-run the pipeline after fixing
+
+          ---
+          SRE CI Security Scan
         to: ${{ inputs.mail_receivers }}
         from: ${{ inputs.mail_username }}
       continue-on-error: true
