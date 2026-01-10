@@ -135,6 +135,6 @@ runs:
 
           ---
           SRE CI Security Scan
-        to: ${{ inputs.mail_receivers }}
+        to: ${{ env.MAIL_RECEIVERS }}
         from: ${{ inputs.mail_username }}
       continue-on-error: true
