@@ -1,0 +1,327 @@
+# Composite Action: Trivy Security Scan
+#
+# Save this file at the root of a dedicated action repo, e.g.:
+#   your-org/trivy-scan-action/action.yml
+
+name: Trivy Security Scan
+description: >
+  Scans filesystem (and optionally container image) for secrets, vulnerabilities,
+  and misconfigurations via Trivy server. Fails on fixable findings at configured
+  severity. Sends email alerts when issues are found.
+
+inputs:
+  # ── Trivy ────────────────────────────────────────────────────────────────
+  trivy-server:
+    description: Trivy server URL (e.g. http://trivy.internal:4954)
+    required: true
+  severity:
+    description: Comma-separated severity levels to fail on
+    required: false
+    default: CRITICAL,HIGH
+  scanners:
+    description: Comma-separated scanners to enable
+    required: false
+    default: secret,misconfig,vuln
+
+  # ── Image scan (optional) ─────────────────────────────────────────────────
+  enable-image-scan:
+    description: Enable container image scan (trivy image)
+    required: false
+    default: "false"
+  image-ref:
+    description: Image to scan (e.g. myapp:abc1234). Required if enable-image-scan is true.
+    required: false
+    default: ""
+
+  # ── Mail ─────────────────────────────────────────────────────────────────
+  mail-username:
+    description: SMTP sender address
+    required: true
+  mail-password:
+    description: SMTP password / App Password
+    required: true
+  it-team-email:
+    description: IT team email — receives secret alerts
+    required: true
+  extra-recipients:
+    description: Additional recipients (comma-separated), e.g. SRE team via vars.DEFAULT_MAIL_RECIPIENTS
+    required: false
+    default: ""
+  smtp-server:
+    description: SMTP server address
+    required: false
+    default: smtp.gmail.com
+  smtp-port:
+    description: SMTP server port
+    required: false
+    default: "465"
+
+  # ── Artifact ─────────────────────────────────────────────────────────────
+  retention-days:
+    description: Days to retain the scan artifact
+    required: false
+    default: "30"
+
+runs:
+  using: composite
+  steps:
+    # ── 1. Helm dependency update (skip if no Chart.yaml) ──────────────────
+    - name: Helm dependency update
+      shell: bash
+      run: |
+        find . -name "Chart.yaml" -not -path "*/.git/*" | while read f; do
+          helm dependency update "$(dirname "$f")" 2>/dev/null || true
+        done
+      continue-on-error: true
+
+    # ── 2. Trivy fs scan ────────────────────────────────────────────────────
+    - name: Trivy fs scan
+      shell: bash
+      run: |
+        trivy fs . \
+          --server "${{ inputs.trivy-server }}" \
+          --scanners "${{ inputs.scanners }}" \
+          --severity "${{ inputs.severity }}" \
+          --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+          --format json \
+          --output trivy-fs.json \
+          --exit-code 0
+      continue-on-error: true
+
+    # ── 3. Trivy image scan (optional) ─────────────────────────────────────
+    - name: Trivy image scan
+      if: inputs.enable-image-scan == 'true'
+      shell: bash
+      run: |
+        trivy image \
+          --server "${{ inputs.trivy-server }}" \
+          --scanners "${{ inputs.scanners }}" \
+          --severity "${{ inputs.severity }}" \
+          --format json \
+          --output trivy-image.json \
+          --exit-code 0 \
+          "${{ inputs.image-ref }}"
+      continue-on-error: true
+
+    # ── 4. Parse findings ───────────────────────────────────────────────────
+    - name: Parse findings
+      shell: bash
+      run: |
+        SECRET=0; VULN=0; MISCONF=0; IMAGE_VULN=0
+
+        if [ -f trivy-fs.json ]; then
+          SECRET=$(jq  '[.Results[]?.Secrets[]?] | length' trivy-fs.json 2>/dev/null || echo 0)
+          VULN=$(jq    '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-fs.json 2>/dev/null || echo 0)
+          MISCONF=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-fs.json 2>/dev/null || echo 0)
+        fi
+
+        if [ -f trivy-image.json ]; then
+          IMAGE_VULN=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-image.json 2>/dev/null || echo 0)
+        fi
+
+        echo "SECRET=$SECRET"         >> "$GITHUB_ENV"
+        echo "VULN=$VULN"             >> "$GITHUB_ENV"
+        echo "MISCONF=$MISCONF"       >> "$GITHUB_ENV"
+        echo "IMAGE_VULN=$IMAGE_VULN" >> "$GITHUB_ENV"
+
+        TOTAL=$((SECRET + VULN + MISCONF + IMAGE_VULN))
+        [ "$TOTAL" -gt 0 ] && STATUS="❌ Issues found" || STATUS="✅ Clean"
+        echo "SCAN_STATUS=$STATUS" >> "$GITHUB_ENV"
+
+    # ── 5. Write $GITHUB_STEP_SUMMARY ──────────────────────────────────────
+    - name: Write summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "# 🔍 Trivy — $SCAN_STATUS"
+          echo ""
+          echo "**PR:** #${{ github.event.pull_request.number }} · **Commit:** \`${{ github.sha }}\` · **Author:** \`${{ github.actor }}\`"
+          echo ""
+          echo "| Category | Count | Status |"
+          echo "|----------|:-----:|:------:|"
+          echo "| 🔑 Secrets | $SECRET | $([ "$SECRET"  = "0" ] && echo "✅" || echo "❌") |"
+          echo "| 🛡️ Vulnerabilities (fs, ${{ inputs.severity }}, fixable) | $VULN | $([ "$VULN" = "0" ] && echo "✅" || echo "❌") |"
+          echo "| ⚙️ Misconfigurations (${{ inputs.severity }}, fixable) | $MISCONF | $([ "$MISCONF" = "0" ] && echo "✅" || echo "❌") |"
+          if [ "${{ inputs.enable-image-scan }}" = "true" ]; then
+            echo "| 🐳 Image Vulnerabilities (${{ inputs.severity }}, fixable) | $IMAGE_VULN | $([ "$IMAGE_VULN" = "0" ] && echo "✅" || echo "❌") |"
+          fi
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$VULN" -gt 0 ] && [ -f trivy-fs.json ]; then
+          {
+            echo "## 🛡️ Vulnerabilities"
+            echo "<details><summary>🔴 View all $VULN finding(s)</summary>"
+            echo ""
+            echo "| Severity | CVE | Package | Installed | Fixed in |"
+            echo "|----------|-----|---------|-----------|----------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+            "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+          ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
+          { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$MISCONF" -gt 0 ] && [ -f trivy-fs.json ]; then
+          {
+            echo "## ⚙️ Misconfigurations"
+            echo "<details><summary>🟠 View all $MISCONF finding(s)</summary>"
+            echo ""
+            echo "| Severity | ID | Title | File |"
+            echo "|----------|----|-------|------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            .Results[]? |
+            .Target as $t |
+            .Misconfigurations[]? |
+            select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+            "| \(.Severity) | [\(.ID)](\(.PrimaryURL)) | \(.Title) | \($t) |"
+          ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
+          { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$SECRET" -gt 0 ] && [ -f trivy-fs.json ]; then
+          {
+            echo "## 🔑 Secrets"
+            echo "<details><summary>🔑 View all $SECRET secret(s)</summary>"
+            echo ""
+            echo "| Rule ID | Severity | Title | File |"
+            echo "|---------|----------|-------|------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            .Results[]? |
+            .Target as $t |
+            .Secrets[]? |
+            "| \(.RuleID) | \(.Severity) | \(.Title) | \($t) |"
+          ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
+          { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$IMAGE_VULN" -gt 0 ] && [ -f trivy-image.json ]; then
+          {
+            echo "## 🐳 Image Vulnerabilities"
+            echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
+            echo ""
+            echo "| Severity | CVE | Package | Installed | Fixed in |"
+            echo "|----------|-----|---------|-----------|----------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+            "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+          ' trivy-image.json >> "$GITHUB_STEP_SUMMARY" || true
+          { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    # ── 6. Get commit author email ──────────────────────────────────────────
+    - name: Get commit author email
+      if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
+      shell: bash
+      run: |
+        COMMIT_AUTHOR_EMAIL=$(git show -s --format='%ae' ${{ github.sha }})
+        echo "COMMIT_AUTHOR_EMAIL=$COMMIT_AUTHOR_EMAIL" >> "$GITHUB_ENV"
+
+    # ── 7. Clean mail recipients ────────────────────────────────────────────
+    - name: Clean mail recipients
+      if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
+      shell: bash
+      run: |
+        RAW="${{ env.COMMIT_AUTHOR_EMAIL }},${{ inputs.extra-recipients }}"
+        CLEAN=$(echo "$RAW" | tr ',' '\n' | grep -v 'noreply.github.com' | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+
+        if [ -z "$CLEAN" ]; then
+          CLEAN="${{ inputs.mail-username }}"
+        fi
+
+        echo "MAIL_RECEIVERS=$CLEAN" >> "$GITHUB_ENV"
+
+    # ── 8. Mail full report ─────────────────────────────────────────────────
+    - name: Mail report
+      if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ inputs.smtp-server }}
+        server_port: ${{ inputs.smtp-port }}
+        username: ${{ inputs.mail-username }}
+        password: ${{ inputs.mail-password }}
+        subject: "[Trivy] ${{ env.SCAN_STATUS }} — PR #${{ github.event.pull_request.number }} (${{ github.repository }})"
+        to: ${{ env.MAIL_RECEIVERS }}
+        from: Security Bot <${{ inputs.mail-username }}>
+        body: |
+          Trivy Security Scan — ${{ env.SCAN_STATUS }}
+          ===============================================
+          Repository : ${{ github.repository }}
+          PR         : #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
+          Author     : ${{ github.actor }}
+          Commit     : ${{ github.sha }}
+          Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Findings summary
+          ----------------
+          Secrets                                    : ${{ env.SECRET }}
+          Vulnerabilities fs (${{ inputs.severity }}) : ${{ env.VULN }}
+          Misconfigurations (${{ inputs.severity }})  : ${{ env.MISCONF }}
+          Vulnerabilities image (${{ inputs.severity }}) : ${{ env.IMAGE_VULN }}
+
+          See the Summary tab of the run above for full details.
+
+    # ── 9. Build + mail secret alert → IT team ─────────────────────────────
+    - name: Build secret alert body
+      if: always() && env.SECRET != '0'
+      shell: bash
+      run: |
+        {
+          echo "=== SECRET ALERT ==="
+          echo "Repository : ${{ github.repository }}"
+          echo "PR         : #${{ github.event.pull_request.number }}"
+          echo "Author     : ${{ github.actor }}"
+          echo "Commit     : ${{ github.sha }}"
+          echo "Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "--- Secrets found ---"
+          [ -f trivy-fs.json ] && jq -r '
+            .Results[]? | .Target as $t | .Secrets[]? |
+            "File    : \($t)\nRule    : \(.RuleID)\nTitle   : \(.Title)\nSeverity: \(.Severity)\n"
+          ' trivy-fs.json 2>/dev/null || echo "(no data)"
+        } > secret-alert.txt
+
+    - name: Mail secret alert to IT team
+      if: always() && env.SECRET != '0'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ inputs.smtp-server }}
+        server_port: ${{ inputs.smtp-port }}
+        username: ${{ inputs.mail-username }}
+        password: ${{ inputs.mail-password }}
+        subject: "[SECRET ALERT] ${{ github.repository }} PR #${{ github.event.pull_request.number }} — ${{ env.SECRET }} secret(s)"
+        to: ${{ inputs.it-team-email }}
+        from: Security Bot <${{ inputs.mail-username }}>
+        body: file://secret-alert.txt
+
+    # ── 10. Upload scan artifacts ───────────────────────────────────────────
+    - name: Upload scan artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: trivy-report-${{ github.sha }}
+        path: |
+          trivy-fs.json
+          trivy-image.json
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: ignore
+
+    # ── 11. Fail pipeline ───────────────────────────────────────────────────
+    - name: Evaluate result
+      if: always()
+      shell: bash
+      run: |
+        FAIL=0
+        [ "$SECRET"     -gt 0 ] && echo "❌ $SECRET secret(s) in HEAD"              && FAIL=1
+        [ "$VULN"       -gt 0 ] && echo "❌ $VULN fixable vuln(s) in filesystem"    && FAIL=1
+        [ "$MISCONF"    -gt 0 ] && echo "❌ $MISCONF fixable misconfiguration(s)"   && FAIL=1
+        [ "$IMAGE_VULN" -gt 0 ] && echo "❌ $IMAGE_VULN fixable vuln(s) in image"   && FAIL=1
+        [ "$FAIL" -eq 0 ]      && echo "✅ No blocking findings. OK to merge."
+        exit "$FAIL"
