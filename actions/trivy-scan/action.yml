@@ -1,8 +1,3 @@
-# Composite Action: Trivy Security Scan
-#
-# Save this file at the root of a dedicated action repo, e.g.:
-#   your-org/trivy-scan-action/action.yml
-
 name: Trivy Security Scan
 description: >
   Scans filesystem (and optionally container image) for secrets, vulnerabilities,
@@ -29,7 +24,7 @@ inputs:
     required: false
     default: "false"
   image-ref:
-    description: Image to scan (e.g. myapp:abc1234). Required if enable-image-scan is true.
+    description: Space-separated image list to scan (e.g. "app:abc1234 app-backend:abc1234"). Required if enable-image-scan is true.
     required: false
     default: ""
 
@@ -88,19 +83,23 @@ runs:
           --exit-code 0
       continue-on-error: true
 
-    # ── 3. Trivy image scan (optional) ─────────────────────────────────────
+    # ── 3. Trivy image scan ─────────────────────────────────────
     - name: Trivy image scan
       if: inputs.enable-image-scan == 'true'
       shell: bash
       run: |
-        trivy image \
-          --server "${{ inputs.trivy-server }}" \
-          --scanners "${{ inputs.scanners }}" \
-          --severity "${{ inputs.severity }}" \
-          --format json \
-          --output trivy-image.json \
-          --exit-code 0 \
-          "${{ inputs.image-ref }}"
+        for image_ref in ${{ inputs.image-ref }}; do
+          echo "[INFO] Scanning $image_ref"
+          label=$(echo "$image_ref" | tr '/:' '--')
+          trivy image \
+            --server "${{ inputs.trivy-server }}" \
+            --scanners "${{ inputs.scanners }}" \
+            --severity "${{ inputs.severity }}" \
+            --format json \
+            --output "trivy-image-${label}.json" \
+            --exit-code 0 \
+            "$image_ref"
+        done
       continue-on-error: true
 
     # ── 4. Parse findings ───────────────────────────────────────────────────
@@ -115,9 +114,11 @@ runs:
           MISCONF=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-fs.json 2>/dev/null || echo 0)
         fi
 
-        if [ -f trivy-image.json ]; then
-          IMAGE_VULN=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-image.json 2>/dev/null || echo 0)
-        fi
+        for f in trivy-image-*.json; do
+          [ -f "$f" ] || continue
+          COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' "$f" 2>/dev/null || echo 0)
+          IMAGE_VULN=$((IMAGE_VULN + COUNT))
+        done
 
         echo "SECRET=$SECRET"         >> "$GITHUB_ENV"
         echo "VULN=$VULN"             >> "$GITHUB_ENV"
@@ -200,7 +201,7 @@ runs:
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
         fi
 
-        if [ "$IMAGE_VULN" -gt 0 ] && [ -f trivy-image.json ]; then
+        if [ "$IMAGE_VULN" -gt 0 ]; then
           {
             echo "## 🐳 Image Vulnerabilities"
             echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
@@ -208,11 +209,14 @@ runs:
             echo "| Severity | CVE | Package | Installed | Fixed in |"
             echo "|----------|-----|---------|-----------|----------|"
           } >> "$GITHUB_STEP_SUMMARY"
-          jq -r '
-            .Results[]?.Vulnerabilities[]? |
-            select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-            "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
-          ' trivy-image.json >> "$GITHUB_STEP_SUMMARY" || true
+          for f in trivy-image-*.json; do
+            [ -f "$f" ] || continue
+            jq -r '
+              .Results[]?.Vulnerabilities[]? |
+              select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+              "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+            ' "$f" >> "$GITHUB_STEP_SUMMARY" || true
+          done
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
         fi
 
@@ -309,7 +313,7 @@ runs:
         name: trivy-report-${{ github.sha }}
         path: |
           trivy-fs.json
-          trivy-image.json
+          trivy-image-*.json
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore
 
