@@ -101,6 +101,23 @@ runs:
             "$image_ref"
         done
       continue-on-error: true
+    # ── 3b. Convert JSON → SARIF ────────────────────────────────────────────
+    - name: Convert scan results to SARIF
+      if: always()
+      shell: bash
+      run: |
+        # fs
+        if [ -f trivy-fs.json ]; then
+          trivy convert --format sarif trivy-fs.json > trivy-fs.sarif || true
+        fi
+
+        # image
+        for f in trivy-image-*.json; do
+          [ -f "$f" ] || continue
+          sarif="${f%.json}.sarif"
+          trivy convert --format sarif "$f" > "$sarif" || true
+        done
+      continue-on-error: true
 
     # ── 4. Parse findings ───────────────────────────────────────────────────
     - name: Parse findings
@@ -241,7 +258,6 @@ runs:
         fi
 
         echo "MAIL_RECEIVERS=$CLEAN" >> "$GITHUB_ENV"
-
     # ── 8. Mail full report ─────────────────────────────────────────────────
     - name: Mail report
       if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
@@ -313,7 +329,9 @@ runs:
         name: trivy-report-${{ github.sha }}
         path: |
           trivy-fs.json
+          trivy-fs.sarif
           trivy-image-*.json
+          trivy-image-*.sarif
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore
 
