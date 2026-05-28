@@ -18,7 +18,7 @@ inputs:
     required: false
     default: secret,misconfig,vuln
 
-  # ── Image scan (optional) ─────────────────────────────────────────────────
+  # ── Image scan ─────────────────────────────────────────────────
   enable-image-scan:
     description: Enable container image scan (trivy image)
     required: false
@@ -56,6 +56,10 @@ inputs:
     description: Days to retain the scan artifact
     required: false
     default: "30"
+  github-token:
+    description: 'GitHub token for SARIF upload and gh CLI'
+    required: false
+    default: ${{ github.token }}
 
 runs:
   using: composite
@@ -347,7 +351,7 @@ runs:
             -f tool_name="trivy-$(basename $f .sarif)"
         done
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ inputs.github-token }} 
 
     - name: Upload scan artifacts
       if: always()
