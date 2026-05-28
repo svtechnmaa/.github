@@ -322,16 +322,41 @@ runs:
         body: file://secret-alert.txt
 
     # ── 10. Upload scan artifacts ───────────────────────────────────────────
+    - name: Upload SARIF to GitHub Security (fs)
+      if: always()
+      continue-on-error: ${{ github.event.repository.visibility != 'public' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-fs.sarif
+        category: trivy-fs
+
+    - name: Upload SARIF to GitHub Security (images)
+      if: always()
+      continue-on-error: ${{ github.event.repository.visibility != 'public' }}
+      shell: bash
+      run: |
+        for f in trivy-image-*.sarif; do
+          [ -f "$f" ] || continue
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/code-scanning/sarifs \
+            -f sarif="$(gzip -c "$f" | base64 -w0)" \
+            -f ref="${{ github.ref }}" \
+            -f commit_sha="${{ github.sha }}" \
+            -f tool_name="trivy-$(basename $f .sarif)"
+        done
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Upload scan artifacts
       if: always()
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v4
       with:
         name: trivy-report-${{ github.sha }}
         path: |
           trivy-fs.json
-          trivy-fs.sarif
           trivy-image-*.json
-          trivy-image-*.sarif
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore
 
