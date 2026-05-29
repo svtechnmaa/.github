@@ -265,7 +265,7 @@ runs:
     # ── 8. Mail full report ─────────────────────────────────────────────────
     - name: Mail report
       if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
-      uses: dawidd6/action-send-mail@v3
+      uses: dawidd6/action-send-mail@v16
       with:
         server_address: ${{ inputs.smtp-server }}
         server_port: ${{ inputs.smtp-port }}
@@ -314,7 +314,7 @@ runs:
 
     - name: Mail secret alert to IT team
       if: always() && env.SECRET != '0'
-      uses: dawidd6/action-send-mail@v3
+      uses: dawidd6/action-send-mail@v16
       with:
         server_address: ${{ inputs.smtp-server }}
         server_port: ${{ inputs.smtp-port }}
@@ -329,7 +329,7 @@ runs:
     - name: Upload SARIF to GitHub Security (fs)
       if: always()
       continue-on-error: ${{ github.event.repository.visibility != 'public' }}
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: trivy-fs.sarif
         category: trivy-fs
