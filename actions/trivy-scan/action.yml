@@ -162,11 +162,11 @@ runs:
           echo ""
           echo "| Category | Count | Status |"
           echo "|----------|:-----:|:------:|"
-          echo "| 🔑 Secrets | $SECRET | $([ "$SECRET"  = "0" ] && echo "✅" || echo "❌") |"
-          echo "| 🛡️ Vulnerabilities (fs, ${{ inputs.severity }}, fixable) | $VULN | $([ "$VULN" = "0" ] && echo "✅" || echo "❌") |"
-          echo "| ⚙️ Misconfigurations (${{ inputs.severity }}, fixable) | $MISCONF | $([ "$MISCONF" = "0" ] && echo "✅" || echo "❌") |"
+          echo "| 🔑 Secrets (${{ inputs.severity }}) | $SECRET | $([ "$SECRET"  = "0" ] && echo "✅" || echo "❌") |"
+          echo "| 🛡️ Vulnerabilities (${{ inputs.severity }}) | $VULN | $([ "$VULN" = "0" ] && echo "✅" || echo "❌") |"
+          echo "| ⚙️ Misconfigurations (${{ inputs.severity }}) | $MISCONF | $([ "$MISCONF" = "0" ] && echo "✅" || echo "❌") |"
           if [ "${{ inputs.enable-image-scan }}" = "true" ]; then
-            echo "| 🐳 Image Vulnerabilities (${{ inputs.severity }}, fixable) | $IMAGE_VULN | $([ "$IMAGE_VULN" = "0" ] && echo "✅" || echo "❌") |"
+            echo "| 🐳 Image Vulnerabilities (${{ inputs.severity }}) | $IMAGE_VULN | $([ "$IMAGE_VULN" = "0" ] && echo "✅" || echo "❌") |"
           fi
           echo ""
         } >> "$GITHUB_STEP_SUMMARY"
