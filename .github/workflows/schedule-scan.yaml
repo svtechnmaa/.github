@@ -15,24 +15,16 @@ permissions:
 
 env:
   ORG_NAME: svtechnmaa
+  GH_TOKEN: ${{ github.token }}
+
 
 jobs:
    schedule-scan:
     runs-on: ubuntu-dind
-    steps:
-        # - name: Checkout all repositories
-        #   uses: actions/checkout@v5
-        #   with:
-        #     ref: ${{ github.event.pull_request.head.sha }}
-        #     fetch-depth: 0
-          
-        - name: Install jq
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y jq
-
+    steps:          
         - name: Get all repositories in the organization
           id: get_repos
+          
           run: |
             repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
             echo "Repositories: $repos"
