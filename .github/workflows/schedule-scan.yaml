@@ -1,0 +1,141 @@
+name: Org - Checkout All Repositories
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ORG_NAME: svtechnmaa
+
+jobs:
+  checkout-all-repos:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout .github repository
+        uses: actions/checkout@v7
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: List all repositories in org
+        env:
+          GH_TOKEN: ${{ secrets.ORG_SCAN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p reports
+
+          page=1
+          : > reports/repos.json
+          : > reports/repos.txt
+          : > reports/repos-full-name.txt
+
+          while true; do
+            echo "Fetching page ${page}"
+
+            response="$(curl -sS --fail \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/orgs/${ORG_NAME}/repos?type=all&per_page=100&page=${page}")"
+
+            repo_count="$(echo "${response}" | jq 'length')"
+
+            if [ "${repo_count}" -eq 0 ]; then
+              break
+            fi
+
+            echo "${response}" | jq -c '.[]' >> reports/repos.json
+            echo "${response}" | jq -r '.[] | .clone_url' >> reports/repos.txt
+            echo "${response}" | jq -r '.[] | .full_name' >> reports/repos-full-name.txt
+
+            page=$((page + 1))
+          done
+
+          total="$(wc -l < reports/repos.txt | tr -d ' ')"
+          echo "Total repositories found: ${total}"
+
+          echo "### Repositories found" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Total: ${total}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```text' >> "${GITHUB_STEP_SUMMARY}"
+          cat reports/repos-full-name.txt >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Clone all repositories
+        env:
+          GH_TOKEN: ${{ secrets.ORG_SCAN_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          mkdir -p repos reports
+
+          : > reports/checkout-success.txt
+          : > reports/checkout-failed.txt
+          : > reports/checkout-summary.md
+
+          while read -r repo_url; do
+            repo_name="$(basename "${repo_url}" .git)"
+            target_dir="repos/${repo_name}"
+
+            echo "Cloning ${repo_name}"
+
+            auth_url="$(echo "${repo_url}" | sed "s#https://#https://x-access-token:${GH_TOKEN}@#")"
+
+            if git clone --depth 1 "${auth_url}" "${target_dir}"; then
+              echo "${repo_name}" >> reports/checkout-success.txt
+            else
+              echo "${repo_name}" >> reports/checkout-failed.txt
+            fi
+          done < reports/repos.txt
+
+          success_count="$(wc -l < reports/checkout-success.txt | tr -d ' ')"
+          failed_count="$(wc -l < reports/checkout-failed.txt | tr -d ' ')"
+
+          {
+            echo "# Org checkout summary"
+            echo ""
+            echo "Organization: ${ORG_NAME}"
+            echo ""
+            echo "| Status | Count |"
+            echo "|---|---:|"
+            echo "| Success | ${success_count} |"
+            echo "| Failed | ${failed_count} |"
+            echo ""
+            echo "## Successful repositories"
+            echo ""
+            echo '```text'
+            cat reports/checkout-success.txt
+            echo '```'
+            echo ""
+            echo "## Failed repositories"
+            echo ""
+            echo '```text'
+            cat reports/checkout-failed.txt
+            echo '```'
+          } > reports/checkout-summary.md
+
+          cat reports/checkout-summary.md >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${failed_count}" -gt 0 ]; then
+            echo "Some repositories failed to clone. Please check reports/checkout-failed.txt."
+            exit 1
+          fi
+
+      - name: Upload checkout reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: org-checkout-reports
+          path: |
+            reports/repos.json
+            reports/repos.txt
+            reports/repos-full-name.txt
+            reports/checkout-success.txt
+            reports/checkout-failed.txt
+            reports/checkout-summary.md
