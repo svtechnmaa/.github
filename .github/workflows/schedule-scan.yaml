@@ -20,11 +20,11 @@ jobs:
    schedule-scan:
     runs-on: ubuntu-dind
     steps:
-        - name: Checkout all repositories
-          uses: actions/checkout@v5
-          with:
-            ref: ${{ github.event.pull_request.head.sha }}
-            fetch-depth: 0
+        # - name: Checkout all repositories
+        #   uses: actions/checkout@v5
+        #   with:
+        #     ref: ${{ github.event.pull_request.head.sha }}
+        #     fetch-depth: 0
           
         - name: Install jq
           run: |
