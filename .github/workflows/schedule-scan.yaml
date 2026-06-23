@@ -25,11 +25,11 @@ jobs:
           
           run: |
             echo "Fetching repositories for organization: ${{ env.ORG_NAME }}"
-            echo "$${{ secrets.GH_TOKEN }}" | gh auth login --with-token" 
+            echo "${{ secrets.GH_TOKEN }} | gh auth login --with-token
             repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
             echo "Repositories: $repos"
-            echo "REPOS=$repos" >> $GITHUB_ENV
+            echo "REPOS=$repos" >> "$GITHUB_ENV"
         
         - name: Test out check output 
           run: |
-            echo "Repositories: ${{ env.REPOS }}"
+            echo "Repositories: ${{ env.REPOS }}""
