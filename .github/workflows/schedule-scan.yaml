@@ -41,9 +41,9 @@ jobs:
 
             while true; do
               response="$(curl -sS --fail \
-                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
                 -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/orgs/${ORG_NAME}/repos?type=all&per_page=100&page=${page}")"
+                "https://api.github.com/orgs/$${{ env.ORG_NAME }}/repos?type=all&per_page=100&page=${page}")"
 
               count="$(echo "${response}" | jq 'length')"
 
