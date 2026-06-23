@@ -58,20 +58,60 @@ jobs:
 
             cat tmp/repos.txt
 
-        - name: Git clone all repositories from curl result
+        # - name: Git clone all repositories from curl result
+        #   run: |
+        #     set -euo pipefail
+
+        #     mkdir -p repos
+
+        #     while read -r clone_url; do
+        #       repo_name="$(basename "${clone_url}" .git)"
+
+        #       echo "Cloning ${repo_name}"
+
+        #       auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
+
+        #       git clone --depth 1 "${auth_clone_url}" "repos/${repo_name}"
+        #     done < tmp/repos.txt
+
+        #     echo "All repositories cloned into repos/"
+
+        - name: Git clone or pull all repositories from curl result
           run: |
             set -euo pipefail
-
+    
             mkdir -p repos
-
+    
             while read -r clone_url; do
               repo_name="$(basename "${clone_url}" .git)"
-
-              echo "Cloning ${repo_name}"
-
+              repo_dir="repos/${repo_name}"
+    
               auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
-
-              git clone --depth 1 "${auth_clone_url}" "repos/${repo_name}"
+    
+              echo "Processing ${repo_name}"
+    
+              if [ ! -d "${repo_dir}/.git" ]; then
+                echo "Repo ${repo_name} not found locally. Cloning..."
+                git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
+              else
+                echo "Repo ${repo_name} already exists. Pulling latest..."
+    
+                cd "${repo_dir}"
+    
+                git remote set-url origin "${auth_clone_url}"
+                git fetch origin
+    
+                if git show-ref --verify --quiet refs/remotes/origin/main; then
+                  git checkout main || git checkout -b main origin/main
+                  git pull origin main
+                else
+                  current_branch="$(git rev-parse --abbrev-ref HEAD)"
+                  git pull origin "${current_branch}"
+                fi
+    
+                cd - > /dev/null
+              fi
+    
             done < tmp/repos.txt
-
-            echo "All repositories cloned into repos/"
+    
+            echo "All repositories are available and updated in repos/"
