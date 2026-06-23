@@ -33,3 +33,12 @@ jobs:
         - name: Test out check output 
           run: |
             echo "Repositories: ${{ env.REPOS }}"
+
+        # - name: Run Trivy scan for each repository
+        #   run: |
+        #     echo "Starting Trivy scan for each repository..."
+        #     for repo in ${{ env.REPOS }}; do
+        #       echo "Scanning repository: $repo"
+        #       # Here you would add the actual Trivy scan command, for example:
+        #       # trivy repo ${{ env.ORG_NAME }}/$repo --format json -o $repo-trivy-report.json
+        #       echo "Trivy scan completed for repository: $repo"
