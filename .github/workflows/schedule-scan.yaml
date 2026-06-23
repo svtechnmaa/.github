@@ -20,25 +20,40 @@ jobs:
    Schedule-Scan:
     runs-on: ubuntu-dind
     steps:          
-        - name: Get all repositories in the organization
-          id: get_repos
+        # - name: Get all repositories in the organization
+        #   id: get_repos
           
-          run: |
-            echo "Fetching repositories for organization: ${{ env.ORG_NAME }}"
-            echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
-            repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
-            echo "Repositories: $repos"
-            echo "REPOS=$repos" >> $GITHUB_ENV
-        
-        - name: Test out check output 
-          run: |
-            echo "Repositories: ${{ env.REPOS }}"
-
-        # - name: Run Trivy scan for each repository
         #   run: |
-        #     echo "Starting Trivy scan for each repository..."
-        #     for repo in ${{ env.REPOS }}; do
-        #       echo "Scanning repository: $repo"
-        #       # Here you would add the actual Trivy scan command, for example:
-        #       # trivy repo ${{ env.ORG_NAME }}/$repo --format json -o $repo-trivy-report.json
-        #       echo "Trivy scan completed for repository: $repo"
+        #     echo "Fetching repositories for organization: ${{ env.ORG_NAME }}"
+        #     echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+        #     repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
+        #     echo "Repositories: $repos"
+        #     echo "REPOS=$repos" >> $GITHUB_ENV
+        
+        - name: List all repositories
+          run: |
+            set -euo pipefail
+
+            mkdir -p tmp
+            : > tmp/repos.txt
+
+            page=1
+
+            while true; do
+              response="$(curl -sS --fail \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/orgs/${ORG_NAME}/repos?type=all&per_page=100&page=${page}")"
+
+              count="$(echo "${response}" | jq 'length')"
+
+              if [ "${count}" -eq 0 ]; then
+                break
+              fi
+
+              echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
+
+              page=$((page + 1))
+            done
+
+            cat tmp/repos.txt
