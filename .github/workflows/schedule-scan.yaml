@@ -51,7 +51,7 @@ jobs:
                 break
               fi
 
-              echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
+              echo "${response}" | jq -r '.[].name' >> tmp/repos.txt
 
               page=$((page + 1))
             done
