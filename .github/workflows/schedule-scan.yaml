@@ -56,6 +56,8 @@ jobs:
               page=$((page + 1))
             done
 
+            cat tmp/repos.txt
+
         - name: Clone repositories
           env:
             GH_TOKEN: ${{ secrets.ORG_SCAN_TOKEN }}
