@@ -3,11 +3,10 @@ name: Weekly Org Trivy Scan
 on:
   push:
     branches:
-      - main
       - feat/*
   workflow_dispatch:
-#   schedule:
-#     - cron: "17 2 * * 6"
+  schedule:
+    - cron: "17 2 * * 6"
 
 permissions:
   contents: read
@@ -19,17 +18,7 @@ env:
 jobs:
    Schedule-Scan:
     runs-on: ubuntu-dind
-    steps:          
-        # - name: Get all repositories in the organization
-        #   id: get_repos
-          
-        #   run: |
-        #     echo "Fetching repositories for organization: ${{ env.ORG_NAME }}"
-        #     echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
-        #     repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
-        #     echo "Repositories: $repos"
-        #     echo "REPOS=$repos" >> $GITHUB_ENV
-        
+    steps:                  
         - name: List all repositories
           run: |
             set -euo pipefail
@@ -58,49 +47,31 @@ jobs:
 
             cat tmp/repos.txt
 
-        # - name: Git clone all repositories from curl result
-        #   run: |
-        #     set -euo pipefail
-
-        #     mkdir -p repos
-
-        #     while read -r clone_url; do
-        #       repo_name="$(basename "${clone_url}" .git)"
-
-        #       echo "Cloning ${repo_name}"
-
-        #       auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
-
-        #       git clone --depth 1 "${auth_clone_url}" "repos/${repo_name}"
-        #     done < tmp/repos.txt
-
-        #     echo "All repositories cloned into repos/"
-
         - name: Git clone or pull all repositories from curl result
           run: |
             set -euo pipefail
-    
+
             mkdir -p repos
-    
+
             while read -r clone_url; do
               repo_name="$(basename "${clone_url}" .git)"
               repo_dir="repos/${repo_name}"
-    
+
               auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
-    
+
               echo "Processing ${repo_name}"
-    
+
               if [ ! -d "${repo_dir}/.git" ]; then
                 echo "Repo ${repo_name} not found locally. Cloning..."
                 git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
               else
                 echo "Repo ${repo_name} already exists. Pulling latest..."
-    
+
                 cd "${repo_dir}"
-    
+
                 git remote set-url origin "${auth_clone_url}"
                 git fetch origin
-    
+
                 if git show-ref --verify --quiet refs/remotes/origin/main; then
                   git checkout main || git checkout -b main origin/main
                   git pull origin main
@@ -108,10 +79,11 @@ jobs:
                   current_branch="$(git rev-parse --abbrev-ref HEAD)"
                   git pull origin "${current_branch}"
                 fi
-    
+
                 cd - > /dev/null
               fi
-    
+
             done < tmp/repos.txt
-    
+
             echo "All repositories are available and updated in repos/"
+
