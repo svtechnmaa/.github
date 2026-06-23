@@ -14,12 +14,10 @@ permissions:
   security-events: write
 
 env:
-  ORG_NAME: svtechnmaa
-  GH_TOKEN: ${{ github.token }}
-
+  ORG_NAME: svtechnmaa 
 
 jobs:
-   schedule-scan:
+   Schedule-Scan:
     runs-on: ubuntu-dind
     steps:          
         - name: Get all repositories in the organization
@@ -27,7 +25,7 @@ jobs:
           
           run: |
             echo "Fetching repositories for organization: ${{ env.ORG_NAME }}"
-            echo "$${{ env.GH_TOKEN }}" | gh auth login --with-token" 
+            echo "$${{ secrets.GH_TOKEN }}" | gh auth login --with-token" 
             repos=$(gh repo list ${{ env.ORG_NAME }} --json name -q '.[].name')
             echo "Repositories: $repos"
             echo "REPOS=$repos" >> $GITHUB_ENV
