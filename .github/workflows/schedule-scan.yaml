@@ -40,20 +40,13 @@ jobs:
                 break
               fi
 
-              echo "${response}" | jq -r '.[].repos_url' >> tmp/repos.txt
+              echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
 
               page=$((page + 1))
             done
 
             cat tmp/repos.txt
           
-        - name: output the result to github summary
-          run: |
-            echo "## Repositories List" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat tmp/repos.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-
         # - name: Scan all repositories with Trivy
         #   run: |
         #     set -euo pipefail
@@ -109,7 +102,31 @@ jobs:
             done < tmp/repos.txt
 
             echo "All repositories are available and updated in repos/"
-        
+
+        - name: Summarize Trivy scan results to Github Summary
+          run: |
+            set -euo pipefail
+
+            echo "## Trivy Scan Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            for result_file in /tmp/repos/*.jsons; do
+              if [ -f "${result_file}" ]; then
+                repo_name="$(basename "${result_file}" .jsons)"
+                echo "### ${repo_name}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+
+                # Extract and summarize the results from the JSON file
+                vulnerabilities=$(jq '.Results[].Vulnerabilities | length' "${result_file}")
+                misconfigurations=$(jq '.Results[].Misconfigurations | length' "${result_file}")
+                secrets=$(jq '.Results[].Secrets | length' "${result_file}")
+
+                echo "- Vulnerabilities: ${vulnerabilities}" >> $GITHUB_STEP_SUMMARY
+                echo "- Misconfigurations: ${misconfigurations}" >> $GITHUB_STEP_SUMMARY
+                echo "- Secrets: ${secrets}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done        
         # - name: Upload Trivy scan results
         #   uses: actions/upload-artifact@v3
         #   with:
