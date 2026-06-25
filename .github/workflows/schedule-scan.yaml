@@ -98,7 +98,7 @@ jobs:
               fi
 
               echo "Running Trivy scan on ${repo_dir}"
-              trivy fs -f json  -o /tmp/repo/"${repo_dir}".jsons --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+              trivy fs -f json  -o /tmp/"${repo_name}".jsons --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
 
             done < tmp/repos.txt
 
@@ -111,7 +111,7 @@ jobs:
             echo "## Trivy Scan Results" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            for result_file in /tmp/repo/*.jsons; do
+            for result_file in /tmp/*.jsons; do
               if [ -f "${result_file}" ]; then
                 repo_name="$(basename "${result_file}" .jsons)"
                 echo "### ${repo_name}" >> $GITHUB_STEP_SUMMARY
