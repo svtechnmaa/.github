@@ -46,12 +46,10 @@ jobs:
             done
 
             cat tmp/repos.txt
-
-        - name: Git clone or pull all repositories from curl result
+        
+        - name: Trivy scan on all repositories
           run: |
             set -euo pipefail
-
-            mkdir -p repos
 
             while read -r clone_url; do
               repo_name="$(basename "${clone_url}" .git)"
@@ -83,18 +81,61 @@ jobs:
                 cd - > /dev/null
               fi
 
+              echo "Running Trivy scan on ${repo_dir}"
+              trivy fs -f json -o "${repo_dir}".jsons --scanners vuln,misconfig,secret --severity HIGH,CRITICAL "${repo_dir}" || true
+
             done < tmp/repos.txt
 
-            echo "All repositories are available and updated in repos/"
+            echo "All repositories are available and updated in repos/"         
 
-        - name: Run Trivy scan on all repositories
-          run: |
-            set -euo pipefail
-            for repo_dir in repos/*; do
-              if [ -d "${repo_dir}" ]; then
-                echo "Running Trivy scan on ${repo_dir}"
-                trivy fs --exit-code 1 --severity HIGH,CRITICAL "${repo_dir}" || true
-              fi
-            done
+        # - name: Git clone or pull all repositories from curl result
+        #   run: |
+        #     set -euo pipefail
+
+        #     mkdir -p repos
+
+        #     while read -r clone_url; do
+        #       repo_name="$(basename "${clone_url}" .git)"
+        #       repo_dir="repos/${repo_name}"
+
+        #       auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
+
+        #       echo "Processing ${repo_name}"
+
+        #       if [ ! -d "${repo_dir}/.git" ]; then
+        #         echo "Repo ${repo_name} not found locally. Cloning..."
+        #         git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
+        #       else
+        #         echo "Repo ${repo_name} already exists. Pulling latest..."
+
+        #         cd "${repo_dir}"
+
+        #         git remote set-url origin "${auth_clone_url}"
+        #         git fetch origin
+
+        #         if git show-ref --verify --quiet refs/remotes/origin/main; then
+        #           git checkout main || git checkout -b main origin/main
+        #           git pull origin main
+        #         else
+        #           current_branch="$(git rev-parse --abbrev-ref HEAD)"
+        #           git pull origin "${current_branch}"
+        #         fi
+
+        #         cd - > /dev/null
+        #       fi
+
+        #     done < tmp/repos.txt
+
+        #     echo "All repositories are available and updated in repos/"
+
+        # - name: Run Trivy scan on all repositories
+        #   run: |
+        #     set -euo pipefail
+        #     for repo_dir in repos/*; do
+        #       if [ -d "${repo_dir}" ]; then
+        #         echo "Running Trivy scan on ${repo_dir}"
+        #         trivy fs --exit-code 1 --severity HIGH,CRITICAL "${repo_dir}" || true
+        #       fi
+        #     done
               
 
