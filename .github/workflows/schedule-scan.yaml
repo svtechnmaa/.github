@@ -50,7 +50,7 @@ jobs:
         - name: Trivy scan on all repositories
           run: |
             set -euo pipefail
-            mkdir -p /tmp/repo
+            mkdir -p /tmp/trivy-result
 
             while read -r clone_url; do
               repo_name="$(basename "${clone_url}" .git)"
@@ -83,7 +83,7 @@ jobs:
               fi
 
               echo "Running Trivy scan on ${repo_dir}"
-              trivy fs -f json  -o /tmp/repo/"${repo_name}".jsons --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+              trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
 
             done < tmp/repos.txt
 
@@ -93,23 +93,23 @@ jobs:
           if: always()
           run: |
             set -euo pipefail
-    
+
             echo "# Trivy scan summary" >> "${GITHUB_STEP_SUMMARY}"
             echo "" >> "${GITHUB_STEP_SUMMARY}"
             echo "| Repository | Critical | High | Medium | Low | Secrets | Misconfigurations |" >> "${GITHUB_STEP_SUMMARY}"
             echo "|---|---:|---:|---:|---:|---:|---:|" >> "${GITHUB_STEP_SUMMARY}"
-    
-            for report in trivy-reports/*.json; do
+
+            for report in /tmp/trivy-result/*.json; do
               [ -f "${report}" ] || continue
-    
+
               repo_name="$(basename "${report}" .json)"
-    
+
               critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "${report}")"
               high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "${report}")"
               medium="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' "${report}")"
               low="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "LOW")] | length' "${report}")"
               secrets="$(jq '[.Results[]?.Secrets[]?] | length' "${report}")"
               misconfigs="$(jq '[.Results[]?.Misconfigurations[]?] | length' "${report}")"
-    
+
               echo "| ${repo_name} | ${critical} | ${high} | ${medium} | ${low} | ${secrets} | ${misconfigs} |" >> "${GITHUB_STEP_SUMMARY}"
             done
