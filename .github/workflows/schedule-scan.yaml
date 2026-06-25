@@ -46,12 +46,12 @@ jobs:
             done
 
             cat tmp/repos.txt
-            
+
         - name: Scan all repositories with Trivy
           run: |
             set -euo pipefail
             export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
-            trivy repos --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json tmp/repos.txt || true
+            trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json tmp/repos.txt || true
         
         # - name: Trivy scan on all repositories
         #   run: |
