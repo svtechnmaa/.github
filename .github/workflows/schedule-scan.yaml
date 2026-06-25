@@ -47,12 +47,12 @@ jobs:
 
             cat tmp/repos.txt
           
-          - name: output the result to github summary
-            run: |
-              echo "## Repositories List" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              cat tmp/repos.txt >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
+        - name: output the result to github summary
+          run: |
+            echo "## Repositories List" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat tmp/repos.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
 
         # - name: Scan all repositories with Trivy
         #   run: |
