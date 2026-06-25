@@ -40,7 +40,7 @@ jobs:
                 break
               fi
 
-              echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
+              echo "${response}" | jq -r '.[].url' >> tmp/repos.txt
 
               page=$((page + 1))
             done
@@ -51,7 +51,9 @@ jobs:
           run: |
             set -euo pipefail
             export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
-            trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json tmp/repos.txt || true
+            for repo_url in $(cat tmp/repos.txt); do
+              trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json" "${repo_url}" || true
+            done
         
         # - name: Trivy scan on all repositories
         #   run: |
