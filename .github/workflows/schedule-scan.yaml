@@ -87,3 +87,14 @@ jobs:
 
             echo "All repositories are available and updated in repos/"
 
+        - name: Run Trivy scan on all repositories
+          run: |
+            set -euo pipefail
+            for repo_dir in repos/*; do
+              if [ -d "${repo_dir}" ]; then
+                echo "Running Trivy scan on ${repo_dir}"
+                trivy fs --exit-code 1 --severity HIGH,CRITICAL "${repo_dir}" || true
+              fi
+            done
+              
+
