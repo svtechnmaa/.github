@@ -52,7 +52,7 @@ jobs:
             set -euo pipefail
             export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
             for repo_url in $(cat tmp/repos.txt); do
-              trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json" "${repo_url}" || true
+              trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json "${repo_url}" || true
             done
         
         # - name: Trivy scan on all repositories
