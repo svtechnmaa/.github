@@ -46,6 +46,13 @@ jobs:
             done
 
             cat tmp/repos.txt
+          
+          - name: output the result to github summary
+            run: |
+              echo "## Repositories List" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat tmp/repos.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
 
         # - name: Scan all repositories with Trivy
         #   run: |
@@ -102,12 +109,12 @@ jobs:
             done < tmp/repos.txt
 
             echo "All repositories are available and updated in repos/"
-          
-        - name: Upload Trivy scan results
-          uses: actions/upload-artifact@v3
-          with:
-            name: trivy-scan-results
-            path: /tmp/*.jsons  
+        
+        # - name: Upload Trivy scan results
+        #   uses: actions/upload-artifact@v3
+        #   with:
+        #     name: trivy-scan-results
+        #     path: /tmp/*.jsons  
 
         # - name: Git clone or pull all repositories from curl result
         #   run: |
