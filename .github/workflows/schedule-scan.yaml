@@ -40,61 +40,74 @@ jobs:
                 break
               fi
 
-              echo "${response}" | jq -r '.[].html_url' >> tmp/repos.txt
+              echo "${response}" | jq -r '.[].repos_url' >> tmp/repos.txt
 
               page=$((page + 1))
             done
 
             cat tmp/repos.txt
 
-        - name: Scan all repositories with Trivy
-          run: |
-            set -euo pipefail
-            export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
-            for repo_url in $(cat tmp/repos.txt); do
-              trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o trivy_scan_results.json "${repo_url}" || true
-            done
-        
-        # - name: Trivy scan on all repositories
+        # - name: Scan all repositories with Trivy
         #   run: |
         #     set -euo pipefail
+        #     export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
+        #     for repo_url in $(cat tmp/repos.txt); do
+        #       trivy repo --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret --skip-version-check --format json -o /tmp/trivy_scan_results.json "${repo_url}" || true
+        #     done
+        
+        # - name: Upload Trivy scan results
+        #   uses: actions/upload-artifact@v3
+        #   with:
+        #     name: trivy-scan-results.json
+        #     path: /tmp/trivy_scan_results.json
+        #     retention-days: 7
+        
+        - name: Trivy scan on all repositories
+          run: |
+            set -euo pipefail
 
-        #     while read -r clone_url; do
-        #       repo_name="$(basename "${clone_url}" .git)"
-        #       repo_dir="repos/${repo_name}"
+            while read -r clone_url; do
+              repo_name="$(basename "${clone_url}" .git)"
+              repo_dir="repos/${repo_name}"
 
-        #       auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
+              auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
 
-        #       echo "Processing ${repo_name}"
+              echo "Processing ${repo_name}"
 
-        #       if [ ! -d "${repo_dir}/.git" ]; then
-        #         echo "Repo ${repo_name} not found locally. Cloning..."
-        #         git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
-        #       else
-        #         echo "Repo ${repo_name} already exists. Pulling latest..."
+              if [ ! -d "${repo_dir}/.git" ]; then
+                echo "Repo ${repo_name} not found locally. Cloning..."
+                git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
+              else
+                echo "Repo ${repo_name} already exists. Pulling latest..."
 
-        #         cd "${repo_dir}"
+                cd "${repo_dir}"
 
-        #         git remote set-url origin "${auth_clone_url}"
-        #         git fetch origin
+                git remote set-url origin "${auth_clone_url}"
+                git fetch origin
 
-        #         if git show-ref --verify --quiet refs/remotes/origin/main; then
-        #           git checkout main || git checkout -b main origin/main
-        #           git pull origin main
-        #         else
-        #           current_branch="$(git rev-parse --abbrev-ref HEAD)"
-        #           git pull origin "${current_branch}"
-        #         fi
+                if git show-ref --verify --quiet refs/remotes/origin/main; then
+                  git checkout main || git checkout -b main origin/main
+                  git pull origin main
+                else
+                  current_branch="$(git rev-parse --abbrev-ref HEAD)"
+                  git pull origin "${current_branch}"
+                fi
 
-        #         cd - > /dev/null
-        #       fi
+                cd - > /dev/null
+              fi
 
-        #       echo "Running Trivy scan on ${repo_dir}"
-        #       trivy fs -f json  -o "${repo_dir}".jsons --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+              echo "Running Trivy scan on ${repo_dir}"
+              trivy fs -f json  -o /tmp/"${repo_dir}".jsons --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
 
-        #     done < tmp/repos.txt
+            done < tmp/repos.txt
 
-        #     echo "All repositories are available and updated in repos/"         
+            echo "All repositories are available and updated in repos/"
+          
+        - name: Upload Trivy scan results
+          uses: actions/upload-artifact@v3
+          with:
+            name: trivy-scan-results
+            path: /tmp/*.jsons  
 
         # - name: Git clone or pull all repositories from curl result
         #   run: |
