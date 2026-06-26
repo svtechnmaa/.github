@@ -95,7 +95,10 @@ jobs:
           run: |
             set -euo pipefail
 
-            REPORT_DIR="/tmp/trivy-result"
+            REPORT_DIR="trivy-reports"
+            SUMMARY_ROWS="/tmp/trivy-summary-rows.tsv"
+
+            : > "$SUMMARY_ROWS"
 
             total_critical=0
             total_high=0
@@ -144,12 +147,18 @@ jobs:
 
               if [ "$repo_total" -eq 0 ]; then
                 status="✅"
+                sort_key=1
               else
                 status="❌"
+                sort_key=0
               fi
 
-              echo "| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |" >> "$GITHUB_STEP_SUMMARY"
+              row="| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |"
+
+              echo -e "${sort_key}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
             done
+
+            sort -t $'\t' -k1,1n -k2,2nr -k3,3 "$SUMMARY_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
 
             total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
 
@@ -168,7 +177,7 @@ jobs:
               echo "**Total findings:** ${total_findings}"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
-          
+
         - name: Write Trivy details
           if: always()
           shell: bash
