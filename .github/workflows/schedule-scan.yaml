@@ -198,7 +198,7 @@ jobs:
           run: |
             set -euo pipefail
 
-            REPORT_DIR="trivy-reports"
+            REPORT_DIR="/tmp/trivy-result"
 
             [ -d "$REPORT_DIR" ] || exit 0
 
