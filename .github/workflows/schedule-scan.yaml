@@ -95,7 +95,7 @@ jobs:
           run: |
             set -euo pipefail
 
-            REPORT_DIR="trivy-reports"
+            REPORT_DIR="/tmp/trivy-result"
             SUMMARY_ROWS="/tmp/trivy-summary-rows.tsv"
 
             : > "$SUMMARY_ROWS"
