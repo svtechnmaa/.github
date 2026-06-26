@@ -88,29 +88,6 @@ jobs:
             done < tmp/repos.txt
 
             echo "All repositories are available and updated in repos/"
-
-        - name: Summary Trivy reports to GitHub
-          if: always()
-          run: |
-            set -euo pipefail
-
-            echo "# Trivy scan summary" >> "${GITHUB_STEP_SUMMARY}"
-            echo "" >> "${GITHUB_STEP_SUMMARY}"
-            echo "| Repository | Critical | High | Secrets | Misconfigurations |" >> "${GITHUB_STEP_SUMMARY}"
-            echo "|---|---:|---:|---:|---:|" >> "${GITHUB_STEP_SUMMARY}"
-
-            for report in /tmp/trivy-result/*.json; do
-              [ -f "${report}" ] || continue
-
-              repo_name="$(basename "${report}" .json)"
-
-              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "${report}")"
-              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "${report}")"
-              secrets="$(jq '[.Results[]?.Secrets[]?] | length' "${report}")"
-              misconfigs="$(jq '[.Results[]?.Misconfigurations[]?] | length' "${report}")"
-
-              echo "| ${repo_name} | ${critical} | ${high} | ${secrets} | ${misconfigs} |" >> "${GITHUB_STEP_SUMMARY}"
-            done
         
         - name: Write Trivy summary
           if: always()
@@ -203,6 +180,30 @@ jobs:
             [ -d "$REPORT_DIR" ] || exit 0
 
             {
+              echo "## 🔑 Secret Details"
+              echo ""
+              echo "<details open><summary>View detected secrets</summary>"
+              echo ""
+              echo "| Repository | Severity | Rule ID | Category | Title | File | Line |"
+              echo "|------------|----------|---------|----------|-------|------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+
+              jq -r --arg repo "$repo_name" '
+                .Results[]? |
+                .Target as $target |
+                .Secrets[]? |
+                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | \($target) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
+              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+            done
+
+            {
+              echo ""
+              echo "</details>"
+              echo ""
               echo "## 🛡️ Vulnerability Details"
               echo ""
               echo "<details><summary>View HIGH / CRITICAL vulnerabilities</summary>"
@@ -253,46 +254,4 @@ jobs:
               echo ""
               echo "</details>"
               echo ""
-              echo "## 🔑 Secret Details"
-              echo ""
-              echo "<details><summary>View detected secrets</summary>"
-              echo ""
-              echo "| Repository | Severity | Rule ID | Category | Title | File | Line |"
-              echo "|------------|----------|---------|----------|-------|------|------|"
             } >> "$GITHUB_STEP_SUMMARY"
-
-            for report in "$REPORT_DIR"/*.json; do
-              [ -f "$report" ] || continue
-              repo_name="$(basename "$report" .json)"
-
-              jq -r --arg repo "$repo_name" '
-                .Results[]? |
-                .Target as $target |
-                .Secrets[]? |
-                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | \($target) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
-              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
-            done
-
-            {
-              echo ""
-              echo "</details>"
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"        
-        
-        # - name: Mail to the commiter
-        #   if: always()
-        #   uses: dawidd6/action-send-mail@v3
-        #   with:
-        #     server_address: smtp.gmail.com
-        #     server_port: 465
-        #     username: ${{ secrets.EMAIL_USERNAME }}
-        #     password: ${{ secrets.EMAIL_PASSWORD }}
-        #     subject: "Weekly Trivy Scan Report"
-        #     to: ${{ secrets.EMAIL_TO }}
-        #     from: ${{ secrets.EMAIL_FROM }}
-        #     content_type: text/html
-        #     body: |
-        #       <h2>Weekly Trivy Scan Report</h2>
-        #       <p>Please find the attached report for the weekly Trivy scan.</p>
-        #       <pre>${{ steps.Summary-Trivy-reports-to-GitHub.outputs.summary }}</pre>
-        #     attachments: /tmp/trivy-result/*.json
