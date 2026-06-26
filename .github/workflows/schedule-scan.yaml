@@ -96,8 +96,8 @@ jobs:
 
             echo "# Trivy scan summary" >> "${GITHUB_STEP_SUMMARY}"
             echo "" >> "${GITHUB_STEP_SUMMARY}"
-            echo "| Repository | Critical | High | Medium | Low | Secrets | Misconfigurations |" >> "${GITHUB_STEP_SUMMARY}"
-            echo "|---|---:|---:|---:|---:|---:|---:|" >> "${GITHUB_STEP_SUMMARY}"
+            echo "| Repository | Critical | High | Secrets | Misconfigurations |" >> "${GITHUB_STEP_SUMMARY}"
+            echo "|---|---:|---:|---:|---:|" >> "${GITHUB_STEP_SUMMARY}"
 
             for report in /tmp/trivy-result/*.json; do
               [ -f "${report}" ] || continue
@@ -106,10 +106,193 @@ jobs:
 
               critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "${report}")"
               high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "${report}")"
-              medium="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' "${report}")"
-              low="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "LOW")] | length' "${report}")"
               secrets="$(jq '[.Results[]?.Secrets[]?] | length' "${report}")"
               misconfigs="$(jq '[.Results[]?.Misconfigurations[]?] | length' "${report}")"
 
-              echo "| ${repo_name} | ${critical} | ${high} | ${medium} | ${low} | ${secrets} | ${misconfigs} |" >> "${GITHUB_STEP_SUMMARY}"
+              echo "| ${repo_name} | ${critical} | ${high} | ${secrets} | ${misconfigs} |" >> "${GITHUB_STEP_SUMMARY}"
             done
+        
+        - name: Write Trivy summary
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+
+            REPORT_DIR="/tmp/trivy-result"
+
+            total_critical=0
+            total_high=0
+            total_secrets=0
+            total_misconf_critical=0
+            total_misconf_high=0
+
+            {
+              echo "# 🔍 Trivy Organization Scan"
+              echo ""
+              echo "**Organization:** \`${ORG_NAME}\`"
+              echo ""
+              echo "**Commit:** \`${{ github.sha }}\` · **Actor:** \`${{ github.actor }}\`"
+              echo ""
+              echo "## 📊 Repository Summary"
+              echo ""
+              echo "| Repository | Critical Vulns | High Vulns | Secrets | Critical Misconfigs | High Misconfigs | Status |"
+              echo "|------------|---------------:|-----------:|--------:|--------------------:|----------------:|:------:|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            if [ ! -d "$REPORT_DIR" ]; then
+              echo "No Trivy report directory found: \`$REPORT_DIR\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+
+              repo_name="$(basename "$report" .json)"
+
+              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+
+              secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
+
+              misconf_critical="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              misconf_high="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
+
+              repo_total=$((critical + high + secrets + misconf_critical + misconf_high))
+
+              total_critical=$((total_critical + critical))
+              total_high=$((total_high + high))
+              total_secrets=$((total_secrets + secrets))
+              total_misconf_critical=$((total_misconf_critical + misconf_critical))
+              total_misconf_high=$((total_misconf_high + misconf_high))
+
+              if [ "$repo_total" -eq 0 ]; then
+                status="✅"
+              else
+                status="❌"
+              fi
+
+              echo "| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |" >> "$GITHUB_STEP_SUMMARY"
+            done
+
+            total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
+
+            {
+              echo ""
+              echo "## 📌 Total HIGH / CRITICAL Findings"
+              echo ""
+              echo "| Category | Count | Status |"
+              echo "|----------|------:|:------:|"
+              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo ""
+              echo "**Total findings:** ${total_findings}"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          
+        - name: Write Trivy details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+
+            REPORT_DIR="trivy-reports"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+
+            {
+              echo "## 🛡️ Vulnerability Details"
+              echo ""
+              echo "<details><summary>View HIGH / CRITICAL vulnerabilities</summary>"
+              echo ""
+              echo "| Repository | Severity | CVE | Package | Installed | Fixed in | Target |"
+              echo "|------------|----------|-----|---------|-----------|----------|--------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+
+              jq -r --arg repo "$repo_name" '
+                .Results[]? |
+                .Target as $target |
+                .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                "| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \($target) |"
+              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+            done
+
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## ⚙️ Misconfiguration Details"
+              echo ""
+              echo "<details><summary>View HIGH / CRITICAL misconfigurations</summary>"
+              echo ""
+              echo "| Repository | Severity | ID | Title | File |"
+              echo "|------------|----------|----|-------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+
+              jq -r --arg repo "$repo_name" '
+                .Results[]? |
+                .Target as $target |
+                .Misconfigurations[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                "| `\($repo)` | \(.Severity) | [\(.ID)](\(.PrimaryURL // "")) | \(.Title) | \($target) |"
+              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+            done
+
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## 🔑 Secret Details"
+              echo ""
+              echo "<details><summary>View detected secrets</summary>"
+              echo ""
+              echo "| Repository | Severity | Rule ID | Category | Title | File | Line |"
+              echo "|------------|----------|---------|----------|-------|------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+
+              jq -r --arg repo "$repo_name" '
+                .Results[]? |
+                .Target as $target |
+                .Secrets[]? |
+                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | \($target) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
+              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+            done
+
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"        
+        
+        # - name: Mail to the commiter
+        #   if: always()
+        #   uses: dawidd6/action-send-mail@v3
+        #   with:
+        #     server_address: smtp.gmail.com
+        #     server_port: 465
+        #     username: ${{ secrets.EMAIL_USERNAME }}
+        #     password: ${{ secrets.EMAIL_PASSWORD }}
+        #     subject: "Weekly Trivy Scan Report"
+        #     to: ${{ secrets.EMAIL_TO }}
+        #     from: ${{ secrets.EMAIL_FROM }}
+        #     content_type: text/html
+        #     body: |
+        #       <h2>Weekly Trivy Scan Report</h2>
+        #       <p>Please find the attached report for the weekly Trivy scan.</p>
+        #       <pre>${{ steps.Summary-Trivy-reports-to-GitHub.outputs.summary }}</pre>
+        #     attachments: /tmp/trivy-result/*.json
