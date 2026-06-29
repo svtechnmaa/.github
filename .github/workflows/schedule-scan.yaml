@@ -264,3 +264,102 @@ jobs:
               echo "</details>"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
+
+        # ── Mail weekly organization report ─────────────────────────────────────
+        - name: Build weekly Trivy mail body
+          if: always()
+          shell: bash
+          run: |
+            {
+              echo "Weekly Trivy Organization Scan — ${SCAN_STATUS}"
+              echo "================================================="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Workflow     : ${{ github.workflow }}"
+              echo "Actor        : ${{ github.actor }}"
+              echo "Commit       : ${{ github.sha }}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Findings summary"
+              echo "----------------"
+              echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
+              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
+              echo "Secrets                       : ${TOTAL_SECRET:-0}"
+              echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
+              echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
+              echo "Total findings                : ${TOTAL_FINDINGS:-0}"
+              echo ""
+              echo "Repositories with issues are shown first in the GitHub Actions Summary tab."
+              echo ""
+              echo "Please check the full summary here:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Note:"
+              echo "- This weekly scan includes HIGH and CRITICAL findings only."
+              echo "- Secret values are not included in this email."
+              echo "- Secret details include repository, rule ID, title, file, and line number only."
+            } > weekly-trivy-report.txt
+
+        - name: Mail weekly Trivy report
+          if: always()
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: ${{ inputs.smtp-server }}
+            server_port: ${{ inputs.smtp-port }}
+            username: ${{ inputs.mail-username }}
+            password: ${{ inputs.mail-password }}
+            subject: "[Trivy Weekly] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
+            to: ${{ env.MAIL_RECEIVERS }}
+            from: Security Bot <${{ inputs.mail-username }}>
+            body: file://weekly-trivy-report.txt
+          
+        # # ── Build + mail secret alert to IT team ────────────────────────────────
+        # - name: Build weekly secret alert body
+        #   if: always() && env.TOTAL_SECRET != '0'
+        #   shell: bash
+        #   run: |
+        #     {
+        #       echo "=== WEEKLY SECRET ALERT ==="
+        #       echo ""
+        #       echo "Organization : ${ORG_NAME}"
+        #       echo "Workflow     : ${{ github.workflow }}"
+        #       echo "Actor        : ${{ github.actor }}"
+        #       echo "Commit       : ${{ github.sha }}"
+        #       echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        #       echo ""
+        #       echo "Total secrets found: ${TOTAL_SECRET}"
+        #       echo ""
+        #       echo "--- Secrets found ---"
+          
+        #       for report in trivy-reports/*.json; do
+        #         [ -f "$report" ] || continue
+          
+        #         repo_name="$(basename "$report" .json)"
+          
+        #         jq -r --arg repo "$repo_name" '
+        #           .Results[]? |
+        #           .Target as $target |
+        #           .Secrets[]? |
+        #           "Repository : \($repo)\nFile       : \($target)\nLine       : \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring)\nRule       : \(.RuleID // "-")\nCategory   : \(.Category // "-")\nTitle      : \(.Title // "-")\nSeverity   : \(.Severity // "-")\n"
+        #         ' "$report" 2>/dev/null || true
+        #       done
+          
+        #       echo ""
+        #       echo "Secret values are intentionally not included in this email."
+        #       echo ""
+        #       echo "Full run:"
+        #       echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        #     } > weekly-secret-alert.txt
+          
+        # - name: Mail weekly secret alert to IT team
+        #   if: always() && env.TOTAL_SECRET != '0'
+        #   uses: dawidd6/action-send-mail@v16
+        #   with:
+        #     server_address: ${{ inputs.smtp-server }}
+        #     server_port: ${{ inputs.smtp-port }}
+        #     username: ${{ inputs.mail-username }}
+        #     password: ${{ inputs.mail-password }}
+        #     subject: "[SECRET ALERT][Weekly Trivy] ${{ env.ORG_NAME }} — ${{ env.TOTAL_SECRET }} secret(s)"
+        #     to: ${{ inputs.it-team-email }}
+        #     from: Security Bot <${{ inputs.mail-username }}>
+        #     body: file://weekly-secret-alert.txt
