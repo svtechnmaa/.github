@@ -328,53 +328,53 @@ jobs:
             from: Security Bot <${{ vars.MAIL_USERNAME }}>
             body: file://weekly-trivy-report.txt
           
-        # # ── Build + mail secret alert to IT team ────────────────────────────────
-        # - name: Build weekly secret alert body
-        #   if: always() && env.TOTAL_SECRET != '0'
-        #   shell: bash
-        #   run: |
-        #     {
-        #       echo "=== WEEKLY SECRET ALERT ==="
-        #       echo ""
-        #       echo "Organization : ${ORG_NAME}"
-        #       echo "Workflow     : ${{ github.workflow }}"
-        #       echo "Actor        : ${{ github.actor }}"
-        #       echo "Commit       : ${{ github.sha }}"
-        #       echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        #       echo ""
-        #       echo "Total secrets found: ${TOTAL_SECRET}"
-        #       echo ""
-        #       echo "--- Secrets found ---"
+        # ── Build + mail secret alert to IT team ────────────────────────────────
+        - name: Build weekly secret alert body
+          if: always() && env.TOTAL_SECRET != '0'
+          shell: bash
+          run: |
+            {
+              echo "=== WEEKLY SECRET ALERT ==="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Workflow     : ${{ github.workflow }}"
+              echo "Actor        : ${{ github.actor }}"
+              echo "Commit       : ${{ github.sha }}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Total secrets found: ${TOTAL_SECRET}"
+              echo ""
+              echo "--- Secrets found ---"
           
-        #       for report in trivy-reports/*.json; do
-        #         [ -f "$report" ] || continue
+              for report in trivy-reports/*.json; do
+                [ -f "$report" ] || continue
           
-        #         repo_name="$(basename "$report" .json)"
+                repo_name="$(basename "$report" .json)"
           
-        #         jq -r --arg repo "$repo_name" '
-        #           .Results[]? |
-        #           .Target as $target |
-        #           .Secrets[]? |
-        #           "Repository : \($repo)\nFile       : \($target)\nLine       : \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring)\nRule       : \(.RuleID // "-")\nCategory   : \(.Category // "-")\nTitle      : \(.Title // "-")\nSeverity   : \(.Severity // "-")\n"
-        #         ' "$report" 2>/dev/null || true
-        #       done
+                jq -r --arg repo "$repo_name" '
+                  .Results[]? |
+                  .Target as $target |
+                  .Secrets[]? |
+                  "Repository : \($repo)\nFile       : \($target)\nLine       : \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring)\nRule       : \(.RuleID // "-")\nCategory   : \(.Category // "-")\nTitle      : \(.Title // "-")\nSeverity   : \(.Severity // "-")\n"
+                ' "$report" 2>/dev/null || true
+              done
           
-        #       echo ""
-        #       echo "Secret values are intentionally not included in this email."
-        #       echo ""
-        #       echo "Full run:"
-        #       echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        #     } > weekly-secret-alert.txt
+              echo ""
+              echo "Secret values are intentionally not included in this email."
+              echo ""
+              echo "Full run:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > weekly-secret-alert.txt
           
-        # - name: Mail weekly secret alert to IT team
-        #   if: always() && env.TOTAL_SECRET != '0'
-        #   uses: dawidd6/action-send-mail@v16
-        #   with:
-        #     server_address: ${{ inputs.smtp-server }}
-        #     server_port: ${{ inputs.smtp-port }}
-        #     username: ${{ inputs.mail-username }}
-        #     password: ${{ inputs.mail-password }}
-        #     subject: "[SECRET ALERT][Weekly Trivy] ${{ env.ORG_NAME }} — ${{ env.TOTAL_SECRET }} secret(s)"
-        #     to: ${{ inputs.it-team-email }}
-        #     from: Security Bot <${{ inputs.mail-username }}>
-        #     body: file://weekly-secret-alert.txt
+        - name: Mail weekly secret alert to IT team
+          if: always() && env.TOTAL_SECRET != '0'
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: smtp.gmail.com
+            server_port: 465
+            username:  ${{ vars.MAIL_USERNAME }}
+            password: ${{ secrets.MAIL_PASSWORD }}
+            subject: "[SECRET ALERT][Weekly Trivy] ${{ env.ORG_NAME }} — ${{ env.TOTAL_SECRET }} secret(s)"
+            to: ${{ vars.IT_TEAM_EMAIL }}
+            from: Security Bot <${{ vars.MAIL_USERNAME }}>
+            body: file://weekly-secret-alert.txt
