@@ -44,6 +44,8 @@ runs:
         fi
         if [ "$status" == "exited" ]; then
           echo "Container $CONTAINER_NAME is exited"
+          echo "Last 100 lines of container logs:"
+          docker logs --tail 100 "$CONTAINER_NAME"
           exit 1
         fi
         if [ $elapsed -ge $TIMEOUT ]; then
