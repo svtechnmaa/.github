@@ -106,6 +106,25 @@ jobs:
             total_misconf_critical=0
             total_misconf_high=0
 
+            write_scan_env() {
+              local scan_status="FAILED"
+              total_findings="${total_findings:-0}"
+
+              if [ "${total_findings}" -eq 0 ]; then
+                scan_status="PASSED"
+              fi
+
+              {
+                echo "TOTAL_CRITICAL=${total_critical}"
+                echo "TOTAL_HIGH=${total_high}"
+                echo "TOTAL_SECRET=${total_secrets}"
+                echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
+                echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
+                echo "TOTAL_FINDINGS=${total_findings}"
+                echo "SCAN_STATUS=${scan_status}"
+              } >> "$GITHUB_ENV"
+            }
+
             {
               echo "# 🔍 Trivy Organization Scan"
               echo ""
@@ -121,6 +140,8 @@ jobs:
 
             if [ ! -d "$REPORT_DIR" ]; then
               echo "No Trivy report directory found: \`$REPORT_DIR\`" >> "$GITHUB_STEP_SUMMARY"
+              total_findings=0
+              write_scan_env
               exit 0
             fi
 
@@ -177,6 +198,8 @@ jobs:
               echo "**Total findings:** ${total_findings}"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
+
+            write_scan_env
 
         - name: Write Trivy details
           if: always()
@@ -265,21 +288,6 @@ jobs:
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
 
-            {
-            echo "TOTAL_CRITICAL=${total_critical}"
-            echo "TOTAL_HIGH=${total_high}"
-            echo "TOTAL_SECRET=${total_secrets}"
-            echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
-            echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
-            echo "TOTAL_FINDINGS=${total_findings}"
-
-            if [ "${total_findings}" -eq 0 ]; then
-              echo "SCAN_STATUS=PASSED"
-            else
-              echo "SCAN_STATUS=FAILED"
-            fi
-            } >> "$GITHUB_ENV"
-
         # ── Mail weekly organization report ─────────────────────────────────────
         - name: Build weekly Trivy mail body
           if: always()
@@ -330,6 +338,8 @@ jobs:
           if: always() && env.TOTAL_SECRET != '0'
           shell: bash
           run: |
+            REPORT_DIR="/tmp/trivy-result"
+
             {
               echo "=== WEEKLY SECRET ALERT ==="
               echo ""
@@ -340,7 +350,7 @@ jobs:
               echo ""
               echo "--- Secrets found ---"
           
-              for report in trivy-reports/*.json; do
+              for report in "$REPORT_DIR"/*.json; do
                 [ -f "$report" ] || continue
           
                 repo_name="$(basename "$report" .json)"
