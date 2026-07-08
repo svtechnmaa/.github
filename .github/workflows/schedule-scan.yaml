@@ -1,12 +1,9 @@
 name: Weekly Org Trivy Scan
 
 on:
-  push:
-    branches:
-      - feat/*
-  workflow_dispatch:
   schedule:
-    - cron: "17 2 * * 6"
+    - cron: "00 0 * * 5"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,6 +11,7 @@ permissions:
 
 env:
   ORG_NAME: svtechnmaa 
+  SCAN_TIMEZONE: Asia/Ho_Chi_Minh
 
 jobs:
    Schedule-Scan:
@@ -216,8 +214,6 @@ jobs:
               {
                 echo "# 🔍 Trivy Organization Scan"
                 echo ""
-                echo "**Organization:** \`${ORG_NAME}\`"
-                echo ""
                 echo "No Trivy report directory found: \`$REPORT_DIR\`"
               } >> "$GITHUB_STEP_SUMMARY"
               total_findings=0
@@ -289,6 +285,22 @@ jobs:
 
             write_scan_env
 
+        - name: Set scan timestamp
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+
+            scan_timestamp="$(TZ="${SCAN_TIMEZONE}" date '+%A, %Y-%m-%d %H:%M:%S %Z')"
+            scan_date="$(TZ="${SCAN_TIMEZONE}" date '+%Y-%m-%d')"
+            scan_time="$(TZ="${SCAN_TIMEZONE}" date '+%H:%M:%S %Z')"
+
+            {
+              echo "SCAN_TIMESTAMP=${scan_timestamp}"
+              echo "SCAN_DATE=${scan_date}"
+              echo "SCAN_TIME=${scan_time}"
+            } >> "$GITHUB_ENV"
+
         - name: Build weekly Trivy mail body
           if: always()
           shell: bash
@@ -298,6 +310,7 @@ jobs:
               echo "================================================="
               echo ""
               echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
               echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               echo ""
               echo "Findings summary"
@@ -344,6 +357,7 @@ jobs:
               echo "=== WEEKLY SECRET ALERT ==="
               echo ""
               echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
               echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               echo ""
               echo "Total secrets found: ${TOTAL_SECRET}"
