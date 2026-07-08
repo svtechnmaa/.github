@@ -88,118 +88,6 @@ jobs:
             done < tmp/repos.txt
 
             echo "All repositories are available and updated in repos/"
-        
-        - name: Write Trivy summary
-          if: always()
-          shell: bash
-          run: |
-            set -euo pipefail
-
-            REPORT_DIR="/tmp/trivy-result"
-            SUMMARY_ROWS="/tmp/trivy-summary-rows.tsv"
-
-            : > "$SUMMARY_ROWS"
-
-            total_critical=0
-            total_high=0
-            total_secrets=0
-            total_misconf_critical=0
-            total_misconf_high=0
-
-            write_scan_env() {
-              local scan_status="FAILED"
-              total_findings="${total_findings:-0}"
-
-              if [ "${total_findings}" -eq 0 ]; then
-                scan_status="PASSED"
-              fi
-
-              {
-                echo "TOTAL_CRITICAL=${total_critical}"
-                echo "TOTAL_HIGH=${total_high}"
-                echo "TOTAL_SECRET=${total_secrets}"
-                echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
-                echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
-                echo "TOTAL_FINDINGS=${total_findings}"
-                echo "SCAN_STATUS=${scan_status}"
-              } >> "$GITHUB_ENV"
-            }
-
-            {
-              echo "# 🔍 Trivy Organization Scan"
-              echo ""
-              echo "**Organization:** \`${ORG_NAME}\`"
-              echo ""
-              echo "**Commit:** \`${{ github.sha }}\` · **Actor:** \`${{ github.actor }}\`"
-              echo ""
-              echo "## 📊 Repository Summary"
-              echo ""
-              echo "| Repository | Critical Vulns | High Vulns | Secrets | Critical Misconfigs | High Misconfigs | Status |"
-              echo "|------------|---------------:|-----------:|--------:|--------------------:|----------------:|:------:|"
-            } >> "$GITHUB_STEP_SUMMARY"
-
-            if [ ! -d "$REPORT_DIR" ]; then
-              echo "No Trivy report directory found: \`$REPORT_DIR\`" >> "$GITHUB_STEP_SUMMARY"
-              total_findings=0
-              write_scan_env
-              exit 0
-            fi
-
-            for report in "$REPORT_DIR"/*.json; do
-              [ -f "$report" ] || continue
-
-              repo_name="$(basename "$report" .json)"
-
-              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
-              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
-
-              secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
-
-              misconf_critical="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")"
-              misconf_high="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
-
-              repo_total=$((critical + high + secrets + misconf_critical + misconf_high))
-
-              total_critical=$((total_critical + critical))
-              total_high=$((total_high + high))
-              total_secrets=$((total_secrets + secrets))
-              total_misconf_critical=$((total_misconf_critical + misconf_critical))
-              total_misconf_high=$((total_misconf_high + misconf_high))
-
-              if [ "$repo_total" -eq 0 ]; then
-                status="✅"
-                sort_key=1
-              else
-                status="❌"
-                sort_key=0
-              fi
-
-              row="| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |"
-
-              echo -e "${sort_key}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
-            done
-
-            sort -t $'\t' -k1,1n -k2,2nr -k3,3 "$SUMMARY_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
-
-            total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
-
-            {
-              echo ""
-              echo "## 📌 Total HIGH / CRITICAL Findings"
-              echo ""
-              echo "| Category | Count | Status |"
-              echo "|----------|------:|:------:|"
-              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
-              echo ""
-              echo "**Total findings:** ${total_findings}"
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-
-            write_scan_env
 
         - name: Write Trivy details
           if: always()
@@ -287,8 +175,120 @@ jobs:
               echo "</details>"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
+        
+        - name: Write Trivy summary
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
 
-        # ── Mail weekly organization report ─────────────────────────────────────
+            REPORT_DIR="/tmp/trivy-result"
+            SUMMARY_ROWS="/tmp/trivy-summary-rows.tsv"
+
+            : > "$SUMMARY_ROWS"
+
+            total_critical=0
+            total_high=0
+            total_secrets=0
+            total_misconf_critical=0
+            total_misconf_high=0
+
+            write_scan_env() {
+              local scan_status="FAILED"
+              total_findings="${total_findings:-0}"
+
+              if [ "${total_findings}" -eq 0 ]; then
+                scan_status="PASSED"
+              fi
+
+              {
+                echo "TOTAL_CRITICAL=${total_critical}"
+                echo "TOTAL_HIGH=${total_high}"
+                echo "TOTAL_SECRET=${total_secrets}"
+                echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
+                echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
+                echo "TOTAL_FINDINGS=${total_findings}"
+                echo "SCAN_STATUS=${scan_status}"
+              } >> "$GITHUB_ENV"
+            }
+
+            if [ ! -d "$REPORT_DIR" ]; then
+              {
+                echo "# 🔍 Trivy Organization Scan"
+                echo ""
+                echo "**Organization:** \`${ORG_NAME}\`"
+                echo ""
+                echo "No Trivy report directory found: \`$REPORT_DIR\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              total_findings=0
+              write_scan_env
+              exit 0
+            fi
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+
+              repo_name="$(basename "$report" .json)"
+
+              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+
+              secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
+
+              misconf_critical="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              misconf_high="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
+
+              repo_total=$((critical + high + secrets + misconf_critical + misconf_high))
+
+              total_critical=$((total_critical + critical))
+              total_high=$((total_high + high))
+              total_secrets=$((total_secrets + secrets))
+              total_misconf_critical=$((total_misconf_critical + misconf_critical))
+              total_misconf_high=$((total_misconf_high + misconf_high))
+
+              if [ "$repo_total" -eq 0 ]; then
+                status="✅"
+                sort_key=1
+              else
+                status="❌"
+                sort_key=0
+              fi
+
+              row="| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |"
+
+              echo -e "${sort_key}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
+            done
+
+            total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
+
+            {
+              echo "# 🔍 Trivy Organization Scan"
+              echo ""
+              echo "**Organization:** \`${ORG_NAME}\`"
+              echo ""
+              echo "## 📌 Total Findings"
+              echo ""
+              echo "| Category | Count | Status |"
+              echo "|----------|------:|:------:|"
+              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo ""
+              echo "**Total findings:** ${total_findings}"
+              echo ""
+              echo "## 📊 Repository Summary"
+              echo ""
+              echo "| Repository | Critical Vulns | High Vulns | Secrets | Critical Misconfigs | High Misconfigs | Status |"
+              echo "|------------|---------------:|-----------:|--------:|--------------------:|----------------:|:------:|"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            sort -t $'\t' -k1,1n -k2,2nr -k3,3 "$SUMMARY_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+
+            write_scan_env
+
         - name: Build weekly Trivy mail body
           if: always()
           shell: bash
@@ -302,9 +302,9 @@ jobs:
               echo ""
               echo "Findings summary"
               echo "----------------"
+              echo "Secrets                       : ${TOTAL_SECRET:-0}"
               echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
               echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
-              echo "Secrets                       : ${TOTAL_SECRET:-0}"
               echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
               echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
@@ -366,7 +366,7 @@ jobs:
               echo ""
               echo "Secret values are intentionally not included in this email."
               echo ""
-              echo "Full run:"
+              echo "Full details:"
               echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             } > weekly-secret-alert.txt
           
