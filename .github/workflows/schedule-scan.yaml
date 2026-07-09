@@ -98,6 +98,13 @@ jobs:
 
             REPORT_DIR="/tmp/trivy-result"
             GITHUB_SERVER="${{ github.server_url }}"
+            SECRET_ROWS="/tmp/trivy-secret-rows.tsv"
+            VULN_ROWS="/tmp/trivy-vulnerability-rows.tsv"
+            MISCONF_ROWS="/tmp/trivy-misconfiguration-rows.tsv"
+
+            : > "$SECRET_ROWS"
+            : > "$VULN_ROWS"
+            : > "$MISCONF_ROWS"
 
             [ -d "$REPORT_DIR" ] || exit 0
 
@@ -106,8 +113,8 @@ jobs:
               echo ""
               echo "<details open><summary>View detected secrets</summary>"
               echo ""
-              echo "| Repository | Severity | Rule ID | Category | Title | File | Line |"
-              echo "|------------|----------|---------|----------|-------|------|------|"
+              echo "| Repository | Severity | Rule ID | Category | Title | File |"
+              echo "|------------|----------|---------|----------|-------|------|"
             } >> "$GITHUB_STEP_SUMMARY"
 
             for report in "$REPORT_DIR"/*.json; do
@@ -133,14 +140,24 @@ jobs:
                   elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
                   else "#L\(.StartLine)"
                   end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  elif . == "MEDIUM" then 2
+                  elif . == "LOW" then 3
+                  else 9
+                  end;
                 .Results[]? |
                 .Target as $target |
                 ($target | clean_target($repo)) as $path |
                 .Secrets[]? |
+                (.Severity // "-") as $severity |
                 ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
-                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | [`\($path)`](\($file_url)) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
-              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+                "\($severity | severity_rank)\t\($repo)\t\($path)\t| `\($repo)` | \($severity) | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | <a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a> |"
+              ' "$report" >> "$SECRET_ROWS" || true
             done
+
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$SECRET_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
 
             {
               echo ""
@@ -157,15 +174,42 @@ jobs:
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
 
-              jq -r --arg repo "$repo_name" '
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def file_link($path; $anchor):
+                  if $path == "" or $path == "-" then "-"
+                  else
+                    ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
+                    "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
+                  end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  else 9
+                  end;
                 .Results[]? |
                 .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
                 .Vulnerabilities[]? |
                 select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-                "| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \($target) |"
-              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+                "\(.Severity | severity_rank)\t\($repo)\t\(.VulnerabilityID)\t| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(file_link($path; "")) |"
+              ' "$report" >> "$VULN_ROWS" || true
             done
+
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
 
             {
               echo ""
@@ -182,15 +226,49 @@ jobs:
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
 
-              jq -r --arg repo "$repo_name" '
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  (.CauseMetadata.StartLine // .StartLine) as $start |
+                  (.CauseMetadata.EndLine // .EndLine // $start) as $end |
+                  if $start == null then ""
+                  elif $end != null and $end != $start then "#L\($start)-L\($end)"
+                  else "#L\($start)"
+                  end;
+                def file_link($path; $anchor):
+                  if $path == "" or $path == "-" then "-"
+                  else
+                    ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
+                    "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
+                  end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  else 9
+                  end;
                 .Results[]? |
                 .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
                 .Misconfigurations[]? |
                 select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-                "| `\($repo)` | \(.Severity) | [\(.ID)](\(.PrimaryURL // "")) | \(.Title) | \($target) |"
-              ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+                "\(.Severity | severity_rank)\t\($repo)\t\(.ID)\t| `\($repo)` | \(.Severity) | [\(.ID)](\(.PrimaryURL // "")) | \(.Title) | \(file_link($path; line_anchor)) |"
+              ' "$report" >> "$MISCONF_ROWS" || true
             done
+
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$MISCONF_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
 
             {
               echo ""
@@ -259,6 +337,7 @@ jobs:
               misconf_high="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
 
               repo_total=$((critical + high + secrets + misconf_critical + misconf_high))
+              repo_critical=$((critical + misconf_critical))
 
               total_critical=$((total_critical + critical))
               total_high=$((total_high + high))
@@ -276,7 +355,7 @@ jobs:
 
               row="| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |"
 
-              echo -e "${sort_key}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
+              echo -e "${sort_key}\t${repo_critical}\t${critical}\t${misconf_critical}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
             done
 
             total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
@@ -290,11 +369,11 @@ jobs:
               echo ""
               echo "| Category | Count | Status |"
               echo "|----------|------:|:------:|"
-              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
               echo ""
               echo "**Total findings:** ${total_findings}"
               echo ""
@@ -304,7 +383,7 @@ jobs:
               echo "|------------|---------------:|-----------:|--------:|--------------------:|----------------:|:------:|"
             } >> "$GITHUB_STEP_SUMMARY"
 
-            sort -t $'\t' -k1,1n -k2,2nr -k3,3 "$SUMMARY_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            sort -t $'\t' -k1,1n -k2,2nr -k3,3nr -k4,4nr -k5,5nr -k6,6 "$SUMMARY_ROWS" | cut -f7- >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
 
             write_scan_env
@@ -339,11 +418,11 @@ jobs:
               echo ""
               echo "Findings summary"
               echo "----------------"
-              echo "Secrets                       : ${TOTAL_SECRET:-0}"
               echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
-              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
               echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
+              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
               echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
+              echo "Secrets                       : ${TOTAL_SECRET:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
               echo ""
               echo "Repositories with issues are shown first in the GitHub Actions Summary tab."
