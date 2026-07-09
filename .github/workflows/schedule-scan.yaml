@@ -23,55 +23,40 @@ jobs:
         - name: List all repositories
           run: |
             set -euo pipefail
-
             mkdir -p tmp
             : > tmp/repos.txt
-
             page=1
-
             while true; do
               response="$(curl -sS --fail \
                 -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/orgs/${{ env.ORG_NAME }}/repos?type=all&per_page=100&page=${page}")"
-
               count="$(echo "${response}" | jq 'length')"
-
               if [ "${count}" -eq 0 ]; then
                 break
               fi
-
               echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
-
               page=$((page + 1))
             done
-
             cat tmp/repos.txt
                   
         - name: Trivy scan on all repositories
           run: |
             set -euo pipefail
             mkdir -p /tmp/trivy-result
-
             while read -r clone_url; do
               repo_name="$(basename "${clone_url}" .git)"
               repo_dir="repos/${repo_name}"
-
               auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
-
               echo "Processing ${repo_name}"
-
               if [ ! -d "${repo_dir}/.git" ]; then
                 echo "Repo ${repo_name} not found locally. Cloning..."
                 git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
               else
                 echo "Repo ${repo_name} already exists. Pulling latest..."
-
                 cd "${repo_dir}"
-
                 git remote set-url origin "${auth_clone_url}"
                 git fetch origin
-
                 if git show-ref --verify --quiet refs/remotes/origin/main; then
                   git checkout main || git checkout -b main origin/main
                   git pull origin main
@@ -79,23 +64,17 @@ jobs:
                   current_branch="$(git rev-parse --abbrev-ref HEAD)"
                   git pull origin "${current_branch}"
                 fi
-
                 cd - > /dev/null
               fi
-
               echo "Running Trivy scan on ${repo_dir}"
               trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
-
             done < tmp/repos.txt
-
             echo "All repositories are available and updated in repos/"
-
         - name: Write Trivy details
           if: always()
           shell: bash
           run: |
             set -euo pipefail
-
             REPORT_DIR="/tmp/trivy-result"
             GITHUB_SERVER="${{ github.server_url }}"
             SECRET_ROWS="/tmp/trivy-secret-rows.tsv"
@@ -107,7 +86,6 @@ jobs:
             : > "$MISCONF_ROWS"
 
             [ -d "$REPORT_DIR" ] || exit 0
-
             {
               echo "## 🔑 Secret Details"
               echo ""
@@ -116,12 +94,10 @@ jobs:
               echo "| Repository | Severity | Rule ID | Category | Title | File |"
               echo "|------------|----------|---------|----------|-------|------|"
             } >> "$GITHUB_STEP_SUMMARY"
-
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
               repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
-
               jq -r \
                 --arg github_server "$GITHUB_SERVER" \
                 --arg org "$ORG_NAME" \
@@ -152,13 +128,11 @@ jobs:
                 ($target | clean_target($repo)) as $path |
                 .Secrets[]? |
                 (.Severity // "-") as $severity |
-                ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
                 "\($severity | severity_rank)\t\($repo)\t\($path)\t| `\($repo)` | \($severity) | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | <a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a> |"
               ' "$report" >> "$SECRET_ROWS" || true
             done
-
             sort -t $'\t' -k1,1n -k2,2 -k3,3 "$SECRET_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
-
             {
               echo ""
               echo "</details>"
@@ -170,12 +144,10 @@ jobs:
               echo "| Repository | Severity | CVE | Package | Installed | Fixed in | Target |"
               echo "|------------|----------|-----|---------|-----------|----------|--------|"
             } >> "$GITHUB_STEP_SUMMARY"
-
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
               repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
-
               jq -r \
                 --arg github_server "$GITHUB_SERVER" \
                 --arg org "$ORG_NAME" \
@@ -189,10 +161,10 @@ jobs:
                   end;
                 def encode_path:
                   split("/") | map(@uri) | join("/");
-                def file_link($path; $anchor):
+                def file_link($path):
                   if $path == "" or $path == "-" then "-"
                   else
-                    ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
+                    ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path)) as $file_url |
                     "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
                   end;
                 def severity_rank:
@@ -205,12 +177,10 @@ jobs:
                 (($target // "-") | clean_target($repo)) as $path |
                 .Vulnerabilities[]? |
                 select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-                "\(.Severity | severity_rank)\t\($repo)\t\(.VulnerabilityID)\t| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(file_link($path; "")) |"
+                "\(.Severity | severity_rank)\t\($repo)\t\(.VulnerabilityID)\t| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(file_link($path)) |"
               ' "$report" >> "$VULN_ROWS" || true
             done
-
             sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
-
             {
               echo ""
               echo "</details>"
@@ -222,12 +192,10 @@ jobs:
               echo "| Repository | Severity | ID | Title | File |"
               echo "|------------|----------|----|-------|------|"
             } >> "$GITHUB_STEP_SUMMARY"
-
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
               repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
-
               jq -r \
                 --arg github_server "$GITHUB_SERVER" \
                 --arg org "$ORG_NAME" \
@@ -251,7 +219,7 @@ jobs:
                 def file_link($path; $anchor):
                   if $path == "" or $path == "-" then "-"
                   else
-                    ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
+                    ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
                     "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
                   end;
                 def severity_rank:
@@ -267,9 +235,7 @@ jobs:
                 "\(.Severity | severity_rank)\t\($repo)\t\(.ID)\t| `\($repo)` | \(.Severity) | [\(.ID)](\(.PrimaryURL // "")) | \(.Title) | \(file_link($path; line_anchor)) |"
               ' "$report" >> "$MISCONF_ROWS" || true
             done
-
             sort -t $'\t' -k1,1n -k2,2 -k3,3 "$MISCONF_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
-
             {
               echo ""
               echo "</details>"
@@ -281,26 +247,20 @@ jobs:
           shell: bash
           run: |
             set -euo pipefail
-
             REPORT_DIR="/tmp/trivy-result"
             SUMMARY_ROWS="/tmp/trivy-summary-rows.tsv"
-
             : > "$SUMMARY_ROWS"
-
             total_critical=0
             total_high=0
             total_secrets=0
             total_misconf_critical=0
             total_misconf_high=0
-
             write_scan_env() {
               local scan_status="FAILED"
               total_findings="${total_findings:-0}"
-
               if [ "${total_findings}" -eq 0 ]; then
                 scan_status="PASSED"
               fi
-
               {
                 echo "TOTAL_CRITICAL=${total_critical}"
                 echo "TOTAL_HIGH=${total_high}"
@@ -311,7 +271,6 @@ jobs:
                 echo "SCAN_STATUS=${scan_status}"
               } >> "$GITHUB_ENV"
             }
-
             if [ ! -d "$REPORT_DIR" ]; then
               {
                 echo "# 🔍 Trivy Organization Scan"
@@ -322,29 +281,20 @@ jobs:
               write_scan_env
               exit 0
             fi
-
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
-
               repo_name="$(basename "$report" .json)"
-
               critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
               high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
-
               secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
-
               misconf_critical="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")"
               misconf_high="$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
-
               repo_total=$((critical + high + secrets + misconf_critical + misconf_high))
-              repo_critical=$((critical + misconf_critical))
-
               total_critical=$((total_critical + critical))
               total_high=$((total_high + high))
               total_secrets=$((total_secrets + secrets))
               total_misconf_critical=$((total_misconf_critical + misconf_critical))
               total_misconf_high=$((total_misconf_high + misconf_high))
-
               if [ "$repo_total" -eq 0 ]; then
                 status="✅"
                 sort_key=1
@@ -352,14 +302,10 @@ jobs:
                 status="❌"
                 sort_key=0
               fi
-
               row="| \`${repo_name}\` | ${critical} | ${high} | ${secrets} | ${misconf_critical} | ${misconf_high} | ${status} |"
-
-              echo -e "${sort_key}\t${repo_critical}\t${critical}\t${misconf_critical}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
+              echo -e "${sort_key}\t${repo_total}\t${repo_name}\t${row}" >> "$SUMMARY_ROWS"
             done
-
             total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
-
             {
               echo "# 🔍 Trivy Organization Scan"
               echo ""
@@ -369,11 +315,11 @@ jobs:
               echo ""
               echo "| Category | Count | Status |"
               echo "|----------|------:|:------:|"
-              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
-              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
               echo ""
               echo "**Total findings:** ${total_findings}"
               echo ""
@@ -382,28 +328,22 @@ jobs:
               echo "| Repository | Critical Vulns | High Vulns | Secrets | Critical Misconfigs | High Misconfigs | Status |"
               echo "|------------|---------------:|-----------:|--------:|--------------------:|----------------:|:------:|"
             } >> "$GITHUB_STEP_SUMMARY"
-
-            sort -t $'\t' -k1,1n -k2,2nr -k3,3nr -k4,4nr -k5,5nr -k6,6 "$SUMMARY_ROWS" | cut -f7- >> "$GITHUB_STEP_SUMMARY"
+            sort -t $'\t' -k1,1n -k2,2nr -k3,3 "$SUMMARY_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-
             write_scan_env
-
         - name: Set scan timestamp
           if: always()
           shell: bash
           run: |
             set -euo pipefail
-
             scan_timestamp="$(TZ="${SCAN_TIMEZONE}" date '+%A, %Y-%m-%d %H:%M:%S %Z')"
             scan_date="$(TZ="${SCAN_TIMEZONE}" date '+%Y-%m-%d')"
             scan_time="$(TZ="${SCAN_TIMEZONE}" date '+%H:%M:%S %Z')"
-
             {
               echo "SCAN_TIMESTAMP=${scan_timestamp}"
               echo "SCAN_DATE=${scan_date}"
               echo "SCAN_TIME=${scan_time}"
             } >> "$GITHUB_ENV"
-
         - name: Build weekly Trivy mail body
           if: always()
           shell: bash
@@ -418,11 +358,11 @@ jobs:
               echo ""
               echo "Findings summary"
               echo "----------------"
-              echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
-              echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
-              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
-              echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
               echo "Secrets                       : ${TOTAL_SECRET:-0}"
+              echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
+              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
+              echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
+              echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
               echo ""
               echo "Repositories with issues are shown first in the GitHub Actions Summary tab."
@@ -435,7 +375,6 @@ jobs:
               echo "- Secret values are not included in this email."
               echo "- Secret details include repository, rule ID, title, file, and line number only."
             } > weekly-trivy-report.txt
-
         - name: Mail weekly Trivy report
           if: always()
           uses: dawidd6/action-send-mail@v16
@@ -455,7 +394,6 @@ jobs:
           shell: bash
           run: |
             REPORT_DIR="/tmp/trivy-result"
-
             {
               echo "=== WEEKLY SECRET ALERT ==="
               echo ""
