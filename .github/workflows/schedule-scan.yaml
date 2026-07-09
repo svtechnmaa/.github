@@ -70,7 +70,8 @@ jobs:
               trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
             done < tmp/repos.txt
             echo "All repositories are available and updated in repos/"
-        - name: Write Trivy details
+        
+        - name: Write Trivy secret details
           if: always()
           shell: bash
           run: |
@@ -78,12 +79,8 @@ jobs:
             REPORT_DIR="/tmp/trivy-result"
             GITHUB_SERVER="${{ github.server_url }}"
             SECRET_ROWS="/tmp/trivy-secret-rows.tsv"
-            VULN_ROWS="/tmp/trivy-vulnerability-rows.tsv"
-            MISCONF_ROWS="/tmp/trivy-misconfiguration-rows.tsv"
 
             : > "$SECRET_ROWS"
-            : > "$VULN_ROWS"
-            : > "$MISCONF_ROWS"
 
             [ -d "$REPORT_DIR" ] || exit 0
             {
@@ -137,6 +134,21 @@ jobs:
               echo ""
               echo "</details>"
               echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Write Trivy vulnerability details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            VULN_ROWS="/tmp/trivy-vulnerability-rows.tsv"
+
+            : > "$VULN_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
               echo "## 🛡️ Vulnerability Details"
               echo ""
               echo "<details><summary>View HIGH / CRITICAL vulnerabilities</summary>"
@@ -185,6 +197,21 @@ jobs:
               echo ""
               echo "</details>"
               echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Write Trivy misconfiguration details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            MISCONF_ROWS="/tmp/trivy-misconfiguration-rows.tsv"
+
+            : > "$MISCONF_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
               echo "## ⚙️ Misconfiguration Details"
               echo ""
               echo "<details><summary>View HIGH / CRITICAL misconfigurations</summary>"
