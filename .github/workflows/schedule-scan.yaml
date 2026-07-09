@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "00 0 * * 5"
   workflow_dispatch:
+  push:
+    branches:
+      - feat/*
 
 permissions:
   contents: read
