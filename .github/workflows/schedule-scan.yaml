@@ -94,6 +94,7 @@ jobs:
             set -euo pipefail
 
             REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
 
             [ -d "$REPORT_DIR" ] || exit 0
 
@@ -109,12 +110,32 @@ jobs:
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
 
-              jq -r --arg repo "$repo_name" '
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  if .StartLine == null then ""
+                  elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
+                  else "#L\(.StartLine)"
+                  end;
                 .Results[]? |
                 .Target as $target |
+                ($target | clean_target($repo)) as $path |
                 .Secrets[]? |
-                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | \($target) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
+                ($github_server + "/" + $org + "/" + $repo + "/blob/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                "| `\($repo)` | \(.Severity // "-") | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | [`\($path)`](\($file_url)) | \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring) |"
               ' "$report" >> "$GITHUB_STEP_SUMMARY" || true
             done
 
