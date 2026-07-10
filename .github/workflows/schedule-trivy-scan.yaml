@@ -1,0 +1,653 @@
+name: Weekly Org Trivy Scan
+
+on:
+  schedule:
+    - cron: "00 0 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  ORG_NAME: svtechnmaa 
+  SCAN_TIMEZONE: Asia/Ho_Chi_Minh
+
+jobs:
+   Schedule-Scan:
+    runs-on: ubuntu-dind
+    steps:                  
+        - name: List all repositories
+          run: |
+            set -euo pipefail
+            mkdir -p tmp
+            : > tmp/repos.txt
+            page=1
+            while true; do
+              response="$(curl -sS --fail \
+                -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/orgs/${{ env.ORG_NAME }}/repos?type=all&per_page=100&page=${page}")"
+              count="$(echo "${response}" | jq 'length')"
+              if [ "${count}" -eq 0 ]; then
+                break
+              fi
+              echo "${response}" | jq -r '.[].clone_url' >> tmp/repos.txt
+              page=$((page + 1))
+            done
+            cat tmp/repos.txt
+                  
+        - name: Trivy scan on all repositories
+          run: |
+            set -euo pipefail
+            mkdir -p /tmp/trivy-result
+            while read -r clone_url; do
+              repo_name="$(basename "${clone_url}" .git)"
+              repo_dir="repos/${repo_name}"
+              auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
+              echo "Processing ${repo_name}"
+              if [ ! -d "${repo_dir}/.git" ]; then
+                echo "Repo ${repo_name} not found locally. Cloning..."
+                git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
+              else
+                echo "Repo ${repo_name} already exists. Pulling latest..."
+                cd "${repo_dir}"
+                git remote set-url origin "${auth_clone_url}"
+                git fetch origin
+                if git show-ref --verify --quiet refs/remotes/origin/main; then
+                  git checkout main || git checkout -b main origin/main
+                  git pull origin main
+                else
+                  current_branch="$(git rev-parse --abbrev-ref HEAD)"
+                  git pull origin "${current_branch}"
+                fi
+                cd - > /dev/null
+              fi
+              echo "Running Trivy scan on ${repo_dir}"
+              trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+            done < tmp/repos.txt
+            echo "All repositories are available and updated in repos/"
+
+        - name: Write Trivy summary
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            total_critical=0
+            total_high=0
+            total_secrets=0
+            total_misconf_critical=0
+            total_misconf_high=0
+            write_scan_env() {
+              local scan_status="FAILED"
+              total_findings="${total_findings:-0}"
+              if [ "${total_findings}" -eq 0 ]; then
+                scan_status="PASSED"
+              fi
+              {
+                echo "TOTAL_CRITICAL=${total_critical}"
+                echo "TOTAL_HIGH=${total_high}"
+                echo "TOTAL_SECRET=${total_secrets}"
+                echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
+                echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
+                echo "TOTAL_FINDINGS=${total_findings}"
+                echo "SCAN_STATUS=${scan_status}"
+              } >> "$GITHUB_ENV"
+            }
+            if [ ! -d "$REPORT_DIR" ]; then
+              {
+                echo "# 🔍 Trivy Organization Scan"
+                echo ""
+                echo "No Trivy report directory found: \`$REPORT_DIR\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              total_findings=0
+              write_scan_env
+              exit 0
+            fi
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+              secrets="$(jq '[.Results[]?.Secrets[]?] | length' "$report")"
+              misconf_critical="$(jq '[.Results[]? | select(((.Target // "") | contains("artifacthub") | not)) | .Misconfigurations[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              misconf_high="$(jq '[.Results[]? | select(((.Target // "") | contains("artifacthub") | not)) | .Misconfigurations[]? | select(.Severity == "HIGH")] | length' "$report")"
+              total_critical=$((total_critical + critical))
+              total_high=$((total_high + high))
+              total_secrets=$((total_secrets + secrets))
+              total_misconf_critical=$((total_misconf_critical + misconf_critical))
+              total_misconf_high=$((total_misconf_high + misconf_high))
+            done
+            total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
+            {
+              echo "# 🔍 Trivy Organization Scan"
+              echo ""
+              echo "**Organization:** \`${ORG_NAME}\`"
+              echo ""
+              echo "## 📌 Total Findings"
+              echo ""
+              echo "| Category | Count | Status |"
+              echo "|----------|------:|:------:|"
+              echo "| 🔑 Secrets | ${total_secrets} | $([ "$total_secrets" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo ""
+              echo "**Total findings:** ${total_findings}"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            write_scan_env
+        
+        - name: Write Trivy secret details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            SECRET_ROWS="/tmp/trivy-secret-rows.tsv"
+
+            : > "$SECRET_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
+              echo "## 🔑 Secret Details"
+              echo ""
+              echo "<details open><summary>View detected secrets</summary>"
+              echo ""
+              echo "| Repository | Severity | Rule ID | Category | Title | File |"
+              echo "|------------|----------|---------|----------|-------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  if .StartLine == null then ""
+                  elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
+                  else "#L\(.StartLine)"
+                  end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  elif . == "MEDIUM" then 2
+                  elif . == "LOW" then 3
+                  else 9
+                  end;
+                .Results[]? |
+                .Target as $target |
+                ($target | clean_target($repo)) as $path |
+                .Secrets[]? |
+                (.Severity // "-") as $severity |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                "\($severity | severity_rank)\t\($repo)\t\($path)\t| `\($repo)` | \($severity) | \(.RuleID // "-") | \(.Category // "-") | \(.Title // "-") | <a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a> |"
+              ' "$report" >> "$SECRET_ROWS" || true
+            done
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$SECRET_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Write Trivy vulnerability details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            VULN_ROWS="/tmp/trivy-vulnerability-rows.tsv"
+
+            : > "$VULN_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
+              echo "## 🛡️ Vulnerability Details"
+              echo ""
+              echo "<details><summary>View HIGH / CRITICAL vulnerabilities</summary>"
+              echo ""
+              echo "| Repository | Severity | CVE | Package | Installed | Fixed in | Target |"
+              echo "|------------|----------|-----|---------|-----------|----------|--------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def file_link($path):
+                  if $path == "" or $path == "-" then "-"
+                  else
+                    ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path)) as $file_url |
+                    "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
+                  end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  else 9
+                  end;
+                .Results[]? |
+                .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
+                .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                "\(.Severity | severity_rank)\t\($repo)\t\(.VulnerabilityID)\t| `\($repo)` | \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \(file_link($path)) |"
+              ' "$report" >> "$VULN_ROWS" || true
+            done
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Write Trivy misconfiguration details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            MISCONF_ROWS="/tmp/trivy-misconfiguration-rows.tsv"
+
+            : > "$MISCONF_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
+              echo "## ⚙️ Misconfiguration Details"
+              echo ""
+              echo "<details><summary>View HIGH / CRITICAL misconfigurations</summary>"
+              echo ""
+              echo "| Repository | Severity | ID | Title | File |"
+              echo "|------------|----------|----|-------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  (.CauseMetadata.StartLine // .StartLine) as $start |
+                  (.CauseMetadata.EndLine // .EndLine // $start) as $end |
+                  if $start == null then ""
+                  elif $end != null and $end != $start then "#L\($start)-L\($end)"
+                  else "#L\($start)"
+                  end;
+                def file_link($path; $anchor):
+                  if $path == "" or $path == "-" then "-"
+                  else
+                    ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + $anchor) as $file_url |
+                    "<a href=\"\($file_url | @html)\" target=\"_blank\" rel=\"noopener noreferrer\"><code>\($path | @html)</code></a>"
+                  end;
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  else 9
+                  end;
+                .Results[]? |
+                .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
+                select(($path | contains("artifacthub") | not)) |
+                .Misconfigurations[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                "\(.Severity | severity_rank)\t\($repo)\t\(.ID)\t| `\($repo)` | \(.Severity) | [\(.ID)](\(.PrimaryURL // "")) | \(.Title) | \(file_link($path; line_anchor)) |"
+              ' "$report" >> "$MISCONF_ROWS" || true
+            done
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$MISCONF_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+        - name: Set scan timestamp
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            scan_timestamp="$(TZ="${SCAN_TIMEZONE}" date '+%A, %Y-%m-%d %H:%M:%S %Z')"
+            scan_date="$(TZ="${SCAN_TIMEZONE}" date '+%Y-%m-%d')"
+            scan_time="$(TZ="${SCAN_TIMEZONE}" date '+%H:%M:%S %Z')"
+            {
+              echo "SCAN_TIMESTAMP=${scan_timestamp}"
+              echo "SCAN_DATE=${scan_date}"
+              echo "SCAN_TIME=${scan_time}"
+            } >> "$GITHUB_ENV"
+
+        - name: Build weekly Trivy CSV report
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            CSV_REPORT="weekly-trivy-report.csv"
+
+            jq -n -r '[
+              "Type",
+              "Repository",
+              "Severity",
+              "ID",
+              "Title",
+              "Package",
+              "Installed Version",
+              "Fixed Version",
+              "File",
+              "URL"
+            ] | @csv' > "$CSV_REPORT"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
+
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  if .StartLine == null then ""
+                  elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
+                  else "#L\(.StartLine)"
+                  end;
+                .Results[]? |
+                .Target as $target |
+                ($target | clean_target($repo)) as $path |
+                .Secrets[]? |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                [
+                  "SECRET",
+                  $repo,
+                  (.Severity // ""),
+                  (.RuleID // ""),
+                  (.Title // ""),
+                  "",
+                  "",
+                  "",
+                  $path,
+                  $file_url
+                ] | @csv
+              ' "$report" >> "$CSV_REPORT" || true
+
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                .Results[]? |
+                .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
+                .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path)) as $file_url |
+                [
+                  "VULNERABILITY",
+                  $repo,
+                  (.Severity // ""),
+                  (.VulnerabilityID // ""),
+                  (.Title // ""),
+                  (.PkgName // ""),
+                  (.InstalledVersion // ""),
+                  (.FixedVersion // ""),
+                  $path,
+                  $file_url
+                ] | @csv
+              ' "$report" >> "$CSV_REPORT" || true
+
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  (.CauseMetadata.StartLine // .StartLine) as $start |
+                  (.CauseMetadata.EndLine // .EndLine // $start) as $end |
+                  if $start == null then ""
+                  elif $end != null and $end != $start then "#L\($start)-L\($end)"
+                  else "#L\($start)"
+                  end;
+                .Results[]? |
+                .Target as $target |
+                (($target // "-") | clean_target($repo)) as $path |
+                select(($path | contains("artifacthub") | not)) |
+                .Misconfigurations[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                [
+                  "MISCONFIGURATION",
+                  $repo,
+                  (.Severity // ""),
+                  (.ID // ""),
+                  (.Title // ""),
+                  "",
+                  "",
+                  "",
+                  $path,
+                  $file_url
+                ] | @csv
+              ' "$report" >> "$CSV_REPORT" || true
+            done
+
+        - name: Build weekly Trivy mail body
+          if: always()
+          shell: bash
+          run: |
+            {
+              echo "Weekly Trivy Organization Scan — ${SCAN_STATUS}"
+              echo "================================================="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Findings summary"
+              echo "----------------"
+              echo "Secrets                       : ${TOTAL_SECRET:-0}"
+              echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
+              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
+              echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
+              echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
+              echo "Total findings                : ${TOTAL_FINDINGS:-0}"
+              echo ""
+              echo "Detailed findings are shown in the GitHub Actions Summary tab."
+              echo "A CSV copy is attached to this email for retention."
+              echo ""
+              echo "Please check the full summary here:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Note:"
+              echo "- This weekly scan includes HIGH and CRITICAL findings only."
+              echo "- Secret values are not included in this email."
+              echo "- Secret details include repository, rule ID, title, file, and line number only."
+            } > weekly-trivy-report.txt
+
+        - name: Mail weekly Trivy report
+          if: always()
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: smtp.gmail.com
+            server_port: 465
+            username:  ${{ vars.MAIL_USERNAME }}
+            password: ${{ secrets.MAIL_PASSWORD }}
+            subject: "[Trivy Weekly] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
+            to: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+            from: Security Bot <${{ vars.MAIL_USERNAME }}>
+            body: file://weekly-trivy-report.txt
+            attachments: weekly-trivy-report.csv
+          
+        # ── Build + mail secret alert to IT team ────────────────────────────────
+        - name: Build weekly secret CSV report
+          if: always() && env.TOTAL_SECRET != '0'
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-result"
+            GITHUB_SERVER="${{ github.server_url }}"
+            SECRET_CSV_REPORT="weekly-secret-alert.csv"
+
+            jq -n -r '[
+              "Repository",
+              "Severity",
+              "Rule ID",
+              "Category",
+              "Title",
+              "File",
+              "URL"
+            ] | @csv' > "$SECRET_CSV_REPORT"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              repo_name="$(basename "$report" .json)"
+              repo_ref="$(git -C "repos/${repo_name}" rev-parse HEAD 2>/dev/null || echo "HEAD")"
+
+              jq -r \
+                --arg github_server "$GITHUB_SERVER" \
+                --arg org "$ORG_NAME" \
+                --arg repo "$repo_name" \
+                --arg ref "$repo_ref" '
+                def clean_target($repo):
+                  if startswith("./") then ltrimstr("./") else . end |
+                  if startswith("repos/" + $repo + "/") then ltrimstr("repos/" + $repo + "/")
+                  elif startswith($repo + "/") then ltrimstr($repo + "/")
+                  else .
+                  end;
+                def encode_path:
+                  split("/") | map(@uri) | join("/");
+                def line_anchor:
+                  if .StartLine == null then ""
+                  elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
+                  else "#L\(.StartLine)"
+                  end;
+                .Results[]? |
+                .Target as $target |
+                ($target | clean_target($repo)) as $path |
+                .Secrets[]? |
+                ($github_server + "/" + $org + "/" + $repo + "/blame/" + $ref + "/" + ($path | encode_path) + line_anchor) as $file_url |
+                [
+                  $repo,
+                  (.Severity // ""),
+                  (.RuleID // ""),
+                  (.Category // ""),
+                  (.Title // ""),
+                  $path,
+                  $file_url
+                ] | @csv
+              ' "$report" >> "$SECRET_CSV_REPORT" || true
+            done
+
+        - name: Build weekly secret alert body
+          if: always() && env.TOTAL_SECRET != '0'
+          shell: bash
+          run: |
+            REPORT_DIR="/tmp/trivy-result"
+            {
+              echo "=== WEEKLY SECRET ALERT ==="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Total secrets found: ${TOTAL_SECRET}"
+              echo ""
+              echo "--- Secrets found ---"
+          
+              for report in "$REPORT_DIR"/*.json; do
+                [ -f "$report" ] || continue
+          
+                repo_name="$(basename "$report" .json)"
+          
+                jq -r --arg repo "$repo_name" '
+                  .Results[]? |
+                  .Target as $target |
+                  .Secrets[]? |
+                  "Repository : \($repo)\nFile       : \($target)\nLine       : \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring)\nRule       : \(.RuleID // "-")\nCategory   : \(.Category // "-")\nTitle      : \(.Title // "-")\nSeverity   : \(.Severity // "-")\n"
+                ' "$report" 2>/dev/null || true
+              done
+          
+              echo ""
+              echo "Secret values are intentionally not included in this email."
+              echo "A secret-only CSV is attached for IT tracking."
+              echo ""
+              echo "Full details:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > weekly-secret-alert.txt
+          
+        - name: Mail weekly secret alert to IT team
+          if: always() && env.TOTAL_SECRET != '0'
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: smtp.gmail.com
+            server_port: 465
+            username:  ${{ vars.MAIL_USERNAME }}
+            password: ${{ secrets.MAIL_PASSWORD }}
+            subject: "[SECRET ALERT][Weekly Trivy] ${{ env.ORG_NAME }} — ${{ env.TOTAL_SECRET }} secret(s)"
+            to: ${{ vars.IT_TEAM_EMAIL }}
+            from: Security Bot <${{ vars.MAIL_USERNAME }}>
+            body: file://weekly-secret-alert.txt
+            attachments: weekly-secret-alert.csv
