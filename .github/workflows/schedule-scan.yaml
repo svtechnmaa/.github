@@ -373,7 +373,6 @@ jobs:
               "Installed Version",
               "Fixed Version",
               "File",
-              "Line",
               "URL"
             ] | @csv' > "$CSV_REPORT"
 
@@ -402,11 +401,6 @@ jobs:
                   elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
                   else "#L\(.StartLine)"
                   end;
-                def line_range:
-                  if .StartLine == null then ""
-                  elif .EndLine != null and .EndLine != .StartLine then "\(.StartLine)-\(.EndLine)"
-                  else "\(.StartLine)"
-                  end;
                 .Results[]? |
                 .Target as $target |
                 ($target | clean_target($repo)) as $path |
@@ -422,7 +416,6 @@ jobs:
                   "",
                   "",
                   $path,
-                  line_range,
                   $file_url
                 ] | @csv
               ' "$report" >> "$CSV_REPORT" || true
@@ -456,7 +449,6 @@ jobs:
                   (.InstalledVersion // ""),
                   (.FixedVersion // ""),
                   $path,
-                  "",
                   $file_url
                 ] | @csv
               ' "$report" >> "$CSV_REPORT" || true
@@ -481,13 +473,6 @@ jobs:
                   elif $end != null and $end != $start then "#L\($start)-L\($end)"
                   else "#L\($start)"
                   end;
-                def line_range:
-                  (.CauseMetadata.StartLine // .StartLine) as $start |
-                  (.CauseMetadata.EndLine // .EndLine // $start) as $end |
-                  if $start == null then ""
-                  elif $end != null and $end != $start then "\($start)-\($end)"
-                  else "\($start)"
-                  end;
                 .Results[]? |
                 .Target as $target |
                 (($target // "-") | clean_target($repo)) as $path |
@@ -505,7 +490,6 @@ jobs:
                   "",
                   "",
                   $path,
-                  line_range,
                   $file_url
                 ] | @csv
               ' "$report" >> "$CSV_REPORT" || true
@@ -574,7 +558,6 @@ jobs:
               "Category",
               "Title",
               "File",
-              "Line",
               "URL"
             ] | @csv' > "$SECRET_CSV_REPORT"
 
@@ -603,11 +586,6 @@ jobs:
                   elif .EndLine != null and .EndLine != .StartLine then "#L\(.StartLine)-L\(.EndLine)"
                   else "#L\(.StartLine)"
                   end;
-                def line_range:
-                  if .StartLine == null then ""
-                  elif .EndLine != null and .EndLine != .StartLine then "\(.StartLine)-\(.EndLine)"
-                  else "\(.StartLine)"
-                  end;
                 .Results[]? |
                 .Target as $target |
                 ($target | clean_target($repo)) as $path |
@@ -620,7 +598,6 @@ jobs:
                   (.Category // ""),
                   (.Title // ""),
                   $path,
-                  line_range,
                   $file_url
                 ] | @csv
               ' "$report" >> "$SECRET_CSV_REPORT" || true
