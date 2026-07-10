@@ -4,9 +4,9 @@ on:
   schedule:
     - cron: "00 0 * * 5"
   workflow_dispatch:
-  push:
-    branches:
-      - feat/*
+  # push:
+  #   branches:
+  #     - feat/*
 
 permissions:
   contents: read
@@ -527,6 +527,7 @@ jobs:
               echo "- Secret values are not included in this email."
               echo "- Secret details include repository, rule ID, title, file, and line number only."
             } > weekly-trivy-report.txt
+
         - name: Mail weekly Trivy report
           if: always()
           uses: dawidd6/action-send-mail@v16
