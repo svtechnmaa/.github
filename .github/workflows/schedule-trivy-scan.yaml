@@ -15,7 +15,7 @@ env:
 
 jobs:
    Schedule-Scan:
-    runs-on: ubuntu-dind
+    runs-on: trivy-dind
     steps:                  
         - name: List all repositories
           run: |
