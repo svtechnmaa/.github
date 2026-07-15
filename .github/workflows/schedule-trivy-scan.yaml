@@ -41,32 +41,96 @@ jobs:
           run: |
             set -euo pipefail
             mkdir -p /tmp/trivy-result
+            FAILURE_REPORT="/tmp/trivy-scan-failures.tsv"
+            : > "$FAILURE_REPORT"
+            scan_failed=0
+
+            record_scan_failure() {
+              local repo_name="$1"
+              local failure_message="$2"
+              printf '%s\t%s\n' "$repo_name" "$failure_message" >> "$FAILURE_REPORT"
+            }
+
+            if ! command -v trivy >/dev/null 2>&1; then
+              recorded_missing_trivy=0
+              while read -r clone_url; do
+                [ -n "$clone_url" ] || continue
+                repo_name="$(basename "${clone_url}" .git)"
+                record_scan_failure "$repo_name" "Trivy command was not found on the runner"
+                recorded_missing_trivy=1
+              done < tmp/repos.txt
+              if [ "$recorded_missing_trivy" -eq 0 ]; then
+                record_scan_failure "workflow" "Trivy command was not found on the runner"
+              fi
+              echo "::error::Trivy command was not found on the runner"
+              exit 1
+            fi
+
             while read -r clone_url; do
+              [ -n "$clone_url" ] || continue
               repo_name="$(basename "${clone_url}" .git)"
               repo_dir="repos/${repo_name}"
               auth_clone_url="$(echo "${clone_url}" | sed "s#https://#https://x-access-token:${{ secrets.GH_TOKEN }}@#")"
               echo "Processing ${repo_name}"
               if [ ! -d "${repo_dir}/.git" ]; then
                 echo "Repo ${repo_name} not found locally. Cloning..."
-                git clone --depth 1 "${auth_clone_url}" "${repo_dir}"
+                if ! git clone --depth 1 "${auth_clone_url}" "${repo_dir}"; then
+                  record_scan_failure "$repo_name" "Repository clone failed"
+                  scan_failed=1
+                  continue
+                fi
               else
                 echo "Repo ${repo_name} already exists. Pulling latest..."
-                cd "${repo_dir}"
-                git remote set-url origin "${auth_clone_url}"
-                git fetch origin
-                if git show-ref --verify --quiet refs/remotes/origin/main; then
-                  git checkout main || git checkout -b main origin/main
-                  git pull origin main
-                else
-                  current_branch="$(git rev-parse --abbrev-ref HEAD)"
-                  git pull origin "${current_branch}"
+                if ! (
+                  cd "${repo_dir}"
+                  git remote set-url origin "${auth_clone_url}"
+                  git fetch origin
+                  if git show-ref --verify --quiet refs/remotes/origin/main; then
+                    git checkout main || git checkout -b main origin/main
+                    git pull origin main
+                  else
+                    current_branch="$(git rev-parse --abbrev-ref HEAD)"
+                    git pull origin "${current_branch}"
+                  fi
+                ); then
+                  record_scan_failure "$repo_name" "Repository update failed"
+                  scan_failed=1
+                  continue
                 fi
-                cd - > /dev/null
               fi
               echo "Running Trivy scan on ${repo_dir}"
-              trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+              result_file="/tmp/trivy-result/${repo_name}.json"
+              trivy_log="/tmp/trivy-result/${repo_name}.trivy.log"
+              rm -f "$result_file" "$trivy_log"
+
+              set +e
+              trivy fs -f json -o "$result_file" --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" > "$trivy_log" 2>&1
+              trivy_exit=$?
+              set -e
+
+              if [ "$trivy_exit" -ne 0 ]; then
+                echo "::error::Trivy scan failed for ${repo_name} with exit code ${trivy_exit}"
+                cat "$trivy_log"
+                error_message="$(tail -n 5 "$trivy_log" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c1-500)"
+                [ -n "$error_message" ] || error_message="No error output captured"
+                record_scan_failure "$repo_name" "Trivy scan failed with exit code ${trivy_exit}: ${error_message}"
+                rm -f "$result_file"
+                scan_failed=1
+                continue
+              fi
+
+              if [ ! -s "$result_file" ] || ! jq empty "$result_file" >/dev/null 2>&1; then
+                record_scan_failure "$repo_name" "Trivy produced a missing or invalid JSON report"
+                rm -f "$result_file"
+                scan_failed=1
+                continue
+              fi
             done < tmp/repos.txt
             echo "All repositories are available and updated in repos/"
+            if [ "$scan_failed" -ne 0 ]; then
+              echo "::error::One or more repositories failed to scan. See /tmp/trivy-scan-failures.tsv and the summary report."
+              exit 1
+            fi
 
         - name: Write Trivy summary
           if: always()
@@ -79,10 +143,21 @@ jobs:
             total_secrets=0
             total_misconf_critical=0
             total_misconf_high=0
+            FAILURE_REPORT="/tmp/trivy-scan-failures.tsv"
+            [ -f "$FAILURE_REPORT" ] || : > "$FAILURE_REPORT"
+            scan_failures=0
+
+            refresh_scan_failures() {
+              scan_failures="$(awk 'NF { count++ } END { print count + 0 }' "$FAILURE_REPORT")"
+            }
+
             write_scan_env() {
               local scan_status="FAILED"
+              refresh_scan_failures
               total_findings="${total_findings:-0}"
-              if [ "${total_findings}" -eq 0 ]; then
+              if [ "${scan_failures}" -gt 0 ]; then
+                scan_status="SCAN FAILED"
+              elif [ "${total_findings}" -eq 0 ]; then
                 scan_status="PASSED"
               fi
               {
@@ -92,15 +167,44 @@ jobs:
                 echo "TOTAL_MISCONF_CRITICAL=${total_misconf_critical}"
                 echo "TOTAL_MISCONF_HIGH=${total_misconf_high}"
                 echo "TOTAL_FINDINGS=${total_findings}"
+                echo "SCAN_FAILURES=${scan_failures}"
                 echo "SCAN_STATUS=${scan_status}"
               } >> "$GITHUB_ENV"
             }
+
+            escape_markdown_cell() {
+              local value="$1"
+              value="${value//$'\r'/ }"
+              value="${value//$'\n'/ }"
+              value="${value//|/\\|}"
+              printf '%s' "$value"
+            }
+
+            write_scan_failure_summary() {
+              refresh_scan_failures
+              [ "$scan_failures" -eq 0 ] && return 0
+              {
+                echo "## ⚠️ Scan Failures"
+                echo ""
+                echo "| Repository | Error |"
+                echo "|------------|-------|"
+                while IFS=$'\t' read -r failed_repo failure_message; do
+                  [ -n "${failed_repo}${failure_message}" ] || continue
+                  echo "| \`$(escape_markdown_cell "${failed_repo:-workflow}")\` | $(escape_markdown_cell "${failure_message:-Unknown scan failure}") |"
+                done < "$FAILURE_REPORT"
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
+            }
+
             if [ ! -d "$REPORT_DIR" ]; then
+              printf '%s\t%s\n' "workflow" "No Trivy report directory found: ${REPORT_DIR}" >> "$FAILURE_REPORT"
               {
                 echo "# 🔍 Trivy Organization Scan"
                 echo ""
                 echo "No Trivy report directory found: \`$REPORT_DIR\`"
+                echo ""
               } >> "$GITHUB_STEP_SUMMARY"
+              write_scan_failure_summary
               total_findings=0
               write_scan_env
               exit 0
@@ -119,6 +223,7 @@ jobs:
               total_misconf_high=$((total_misconf_high + misconf_high))
             done
             total_findings=$((total_critical + total_high + total_secrets + total_misconf_critical + total_misconf_high))
+            refresh_scan_failures
             {
               echo "# 🔍 Trivy Organization Scan"
               echo ""
@@ -133,10 +238,12 @@ jobs:
               echo "| 🔴 Critical Misconfigurations | ${total_misconf_critical} | $([ "$total_misconf_critical" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🟠 High Misconfigurations | ${total_misconf_high} | $([ "$total_misconf_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| ⚠️ Scan Failures | ${scan_failures} | $([ "$scan_failures" = "0" ] && echo "✅" || echo "❌") |"
               echo ""
               echo "**Total findings:** ${total_findings}"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
+            write_scan_failure_summary
             write_scan_env
         
         - name: Write Trivy secret details
@@ -337,6 +444,7 @@ jobs:
               echo "</details>"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
+
         - name: Set scan timestamp
           if: always()
           shell: bash
@@ -496,6 +604,7 @@ jobs:
           if: always()
           shell: bash
           run: |
+            FAILURE_REPORT="/tmp/trivy-scan-failures.tsv"
             {
               echo "Weekly Trivy Organization Scan — ${SCAN_STATUS}"
               echo "================================================="
@@ -512,6 +621,16 @@ jobs:
               echo "Critical misconfigurations    : ${TOTAL_MISCONF_CRITICAL:-0}"
               echo "High misconfigurations        : ${TOTAL_MISCONF_HIGH:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
+              echo "Scan failures                 : ${SCAN_FAILURES:-0}"
+              if [ "${SCAN_FAILURES:-0}" != "0" ] && [ -s "$FAILURE_REPORT" ]; then
+                echo ""
+                echo "Scan failures"
+                echo "-------------"
+                while IFS=$'\t' read -r failed_repo failure_message; do
+                  [ -n "${failed_repo}${failure_message}" ] || continue
+                  echo "- ${failed_repo:-workflow}: ${failure_message:-Unknown scan failure}"
+                done < "$FAILURE_REPORT"
+              fi
               echo ""
               echo "Detailed findings are shown in the GitHub Actions Summary tab."
               echo "A CSV copy is attached to this email for retention."
@@ -521,6 +640,7 @@ jobs:
               echo ""
               echo "Note:"
               echo "- This weekly scan includes HIGH and CRITICAL findings only."
+              echo "- If scan failures are listed, finding totals may be incomplete."
               echo "- Secret values are not included in this email."
               echo "- Secret details include repository, rule ID, title, file, and line number only."
             } > weekly-trivy-report.txt
@@ -539,7 +659,6 @@ jobs:
             body: file://weekly-trivy-report.txt
             attachments: weekly-trivy-report.csv
           
-        # ── Build + mail secret alert to IT team ────────────────────────────────
         - name: Build weekly secret CSV report
           if: always() && env.TOTAL_SECRET != '0'
           shell: bash
