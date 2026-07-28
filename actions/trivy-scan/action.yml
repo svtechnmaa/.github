@@ -74,10 +74,65 @@ runs:
       continue-on-error: true
 
     # ── 2. Trivy fs scan ────────────────────────────────────────────────────
-    - name: Trivy fs scan
+    - name: Prepare changed files for Trivy scan
+      id: prepare-trivy-scope
       shell: bash
       run: |
-        trivy fs . \
+        set -euo pipefail
+
+        base_sha="${{ github.event.pull_request.base.sha || github.event.before }}"
+        head_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+        scope_dir=".trivy-scope"
+        changed_files="changed-files.txt"
+
+        echo "Scanning changed files in range: ${base_sha}...${head_sha}"
+
+        rm -rf "${scope_dir}"
+        mkdir -p "${scope_dir}"
+
+        if ! git diff \
+          --name-only \
+          --diff-filter=ACMR \
+          "${base_sha}...${head_sha}" \
+          > "${changed_files}"; then
+          echo "::error::Unable to diff ${base_sha}...${head_sha}. Configure actions/checkout with fetch-depth: 0 before using this composite action."
+          exit 1
+        fi
+
+        echo "Changed files:"
+        cat "${changed_files}"
+
+        copied_count=0
+
+        while IFS= read -r file; do
+          [ -n "${file}" ] || continue
+          [ -f "${file}" ] || continue
+
+          mkdir -p "${scope_dir}/$(dirname "${file}")"
+          cp -- "${file}" "${scope_dir}/${file}"
+
+          copied_count=$((copied_count + 1))
+        done < "${changed_files}"
+
+        if [ "${copied_count}" -eq 0 ]; then
+          echo "No changed files available for Trivy scan."
+          echo '{"SchemaVersion":2,"Results":[]}' > trivy-fs.json
+          echo "has_scope=false" >> "${GITHUB_OUTPUT}"
+          echo "HAS_TRIVY_FS_SCOPE=false" >> "${GITHUB_ENV}"
+          exit 0
+        fi
+
+        echo "Files included in Trivy scan:"
+        find "${scope_dir}" -type f -print
+        echo "has_scope=true" >> "${GITHUB_OUTPUT}"
+        echo "HAS_TRIVY_FS_SCOPE=true" >> "${GITHUB_ENV}"
+      continue-on-error: false
+
+    - name: Trivy fs scan
+      if: steps.prepare-trivy-scope.outputs.has_scope == 'true'
+      shell: bash
+      run: |
+        trivy fs .trivy-scope \
           --server "${{ inputs.trivy-server }}" \
           --scanners "${{ inputs.scanners }}" \
           --severity "${{ inputs.severity }}" \
@@ -112,7 +167,9 @@ runs:
       run: |
         # fs
         if [ -f trivy-fs.json ]; then
-          trivy convert --format sarif trivy-fs.json > trivy-fs.sarif || true
+          if ! trivy convert --format sarif trivy-fs.json > trivy-fs.sarif; then
+            printf '%s\n' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"Trivy","informationUri":"https://trivy.dev","rules":[]}},"results":[]}]}' > trivy-fs.sarif
+          fi
         fi
 
         # image
