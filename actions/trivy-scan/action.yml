@@ -1,14 +1,15 @@
 name: Trivy Security Scan
 description: >
-  Scans filesystem (and optionally container image) for secrets, vulnerabilities,
-  and misconfigurations via Trivy server. Fails on fixable findings at configured
-  severity. Sends email alerts when issues are found.
+  Scans filesystem container image for secrets, vulnerabilities,
+  and misconfigurations via Trivy server with local fallback. Fails on fixable
+  findings at configured severity. Sends email alerts when issues are found.
 
 inputs:
   # ── Trivy ────────────────────────────────────────────────────────────────
   trivy-server:
     description: Trivy server URL (e.g. http://trivy.internal:4954)
-    required: true
+    required: false
+    default: ""
   severity:
     description: Comma-separated severity levels to fail on
     required: false
@@ -128,36 +129,93 @@ runs:
         echo "HAS_TRIVY_FS_SCOPE=true" >> "${GITHUB_ENV}"
       continue-on-error: false
 
+    - name: Determine Trivy scan mode
+      id: trivy-mode
+      if: steps.prepare-trivy-scope.outputs.has_scope == 'true' || inputs.enable-image-scan == 'true'
+      shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+      run: |
+        if [ -n "$TRIVY_SERVER" ] && curl -sS --fail --max-time 5 "${TRIVY_SERVER%/}/healthz" > /dev/null; then
+          echo "✅ Trivy server is UP. Using client/server mode."
+          echo "use_server=true" >> "$GITHUB_OUTPUT"
+        else
+          if [ -n "$TRIVY_SERVER" ]; then
+            echo "⚠️ Trivy server is unavailable. Falling back to local scans."
+          else  
+            echo "ℹ️ Trivy server is not configured. Using local scans."
+          fi
+          echo "use_server=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Trivy fs scan
       if: steps.prepare-trivy-scope.outputs.has_scope == 'true'
       shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SCANNERS: ${{ inputs.scanners }}
+        TRIVY_SEVERITY: ${{ inputs.severity }}
       run: |
-        trivy fs .trivy-scope \
-          --server "${{ inputs.trivy-server }}" \
-          --scanners "${{ inputs.scanners }}" \
-          --severity "${{ inputs.severity }}" \
-          --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
-          --format json \
-          --output trivy-fs.json \
-          --exit-code 0
+        scan_fs() {
+          trivy fs \
+            "$@" \
+            --scanners "$TRIVY_SCANNERS" \
+            --severity "$TRIVY_SEVERITY" \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-fs.json \
+            --exit-code 0 \
+            .trivy-scope
+        }
+
+        if [ "${{ steps.trivy-mode.outputs.use_server }}" = "true" ]; then
+          if ! scan_fs --server "$TRIVY_SERVER"; then
+            echo "⚠️ Trivy server scan failed. Retrying filesystem scan locally."
+            scan_fs
+          fi
+        else
+          scan_fs
+        fi
       continue-on-error: true
 
     # ── 3. Trivy image scan ─────────────────────────────────────
     - name: Trivy image scan
       if: inputs.enable-image-scan == 'true'
       shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SCANNERS: ${{ inputs.scanners }}
+        TRIVY_SEVERITY: ${{ inputs.severity }}
+        TRIVY_IMAGE_REFS: ${{ inputs.image-ref }}
       run: |
-        for image_ref in ${{ inputs.image-ref }}; do
-          echo "[INFO] Scanning $image_ref"
-          label=$(echo "$image_ref" | tr '/:' '--')
+        scan_image() {
+          local image_ref="$1"
+          local output_file="$2"
+          shift 2
+
           trivy image \
-            --server "${{ inputs.trivy-server }}" \
-            --scanners "${{ inputs.scanners }}" \
-            --severity "${{ inputs.severity }}" \
+            "$@" \
+            --scanners "$TRIVY_SCANNERS" \
+            --severity "$TRIVY_SEVERITY" \
             --format json \
-            --output "trivy-image-${label}.json" \
+            --output "$output_file" \
             --exit-code 0 \
             "$image_ref"
+        }
+
+        for image_ref in $TRIVY_IMAGE_REFS; do
+          echo "[INFO] Scanning $image_ref"
+          label=$(echo "$image_ref" | tr '/:' '--')
+          output_file="trivy-image-${label}.json"
+
+          if [ "${{ steps.trivy-mode.outputs.use_server }}" = "true" ]; then
+            if ! scan_image "$image_ref" "$output_file" --server "$TRIVY_SERVER"; then
+              echo "⚠️ Trivy server scan failed for $image_ref. Retrying locally."
+              scan_image "$image_ref" "$output_file"
+            fi
+          else
+            scan_image "$image_ref" "$output_file"
+          fi
         done
       continue-on-error: true
     # ── 3b. Convert JSON → SARIF ────────────────────────────────────────────
@@ -537,7 +595,7 @@ runs:
 
     - name: Upload scan artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: trivy-report-${{ github.sha }}
         path: |
