@@ -212,6 +212,15 @@ runs:
       if: always()
       shell: bash
       run: |
+        SECRET="${SECRET:-0}"
+        VULN="${VULN:-0}"
+        MISCONF="${MISCONF:-0}"
+        IMAGE_VULN="${IMAGE_VULN:-0}"
+        TOTAL=$((SECRET + VULN + MISCONF + IMAGE_VULN))
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+        SECURITY_URL="${{ github.server_url }}/${{ github.repository }}/security/code-scanning"
+
         {
           echo "# 🔍 Trivy — $SCAN_STATUS"
           echo ""
@@ -228,18 +237,85 @@ runs:
           echo ""
         } >> "$GITHUB_STEP_SUMMARY"
 
+        if [ "$TOTAL" -gt 0 ]; then
+          {
+            echo "## Next actions"
+            echo ""
+            echo "This PR is blocked by the findings below. Complete the relevant actions, then push a new commit to rerun the scan."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SECRET" -gt 0 ]; then
+            {
+              echo "### 🔑 Secrets"
+              echo ""
+              echo "1. Rotate or revoke the exposed credential immediately."
+              echo "2. Remove it from the source code and replace it with GitHub Secrets, Vault, or an environment variable."
+              echo "3. Check the reported file and line in **Secrets** below. Do not paste the secret into comments, logs, or the PR description."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$VULN" -gt 0 ]; then
+            {
+              echo "### 🛡️ Filesystem vulnerabilities"
+              echo ""
+              echo "Update or replace each package listed in **Vulnerabilities** below. Use the version in **Fixed in** when Trivy provides one; findings without a fixed version remain blocking."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$MISCONF" -gt 0 ]; then
+            {
+              echo "### ⚙️ Misconfigurations"
+              echo ""
+              echo "Apply the **Resolution** to the reported file and line in **Misconfigurations** below, then verify the configuration still behaves as expected."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$IMAGE_VULN" -gt 0 ]; then
+            {
+              echo "### 🐳 Image vulnerabilities"
+              echo ""
+              echo "Update the packages listed in **Image Vulnerabilities** or update the base image, rebuild and publish the image, then rerun this workflow with the new image reference."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          {
+            echo "Push the remediation commit and wait for this workflow to pass before merging."
+            echo ""
+            if [ -n "${{ github.event.pull_request.number }}" ]; then
+              echo "[View changed files](${PR_URL}/files) · [View workflow run](${RUN_URL}) · [View code scanning alerts](${SECURITY_URL})"
+            else
+              echo "[View workflow run](${RUN_URL}) · [View code scanning alerts](${SECURITY_URL})"
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
         if [ "$VULN" -gt 0 ] && [ -f trivy-fs.json ]; then
           {
             echo "## 🛡️ Vulnerabilities"
             echo "<details><summary>🔴 View all $VULN finding(s)</summary>"
             echo ""
-            echo "| Severity | CVE | Package | Installed | Fixed in |"
-            echo "|----------|-----|---------|-----------|----------|"
+            echo "| Severity | CVE | Package | Installed | Fixed in | Target |"
+            echo "|----------|-----|---------|-----------|----------|--------|"
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '
-            .Results[]?.Vulnerabilities[]? |
+            def clean: tostring | gsub("[\r\n|]"; " ");
+            .Results[]? |
+            .Target as $target |
+            .Vulnerabilities[]? |
             select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-            "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+            (
+              if (.PrimaryURL // "") == ""
+              then (.VulnerabilityID // "Unknown")
+              else "[\(.VulnerabilityID // "Unknown")](\(.PrimaryURL))"
+              end
+            ) as $cve |
+            "| \(.Severity) | \($cve) | \(.PkgName // "-" | clean) | \(.InstalledVersion // "-" | clean) | \(if (.FixedVersion // "") == "" then "-" else (.FixedVersion | clean) end) | \($target | sub("^\\.trivy-scope/"; "") | clean) |"
           ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
         fi
@@ -249,15 +325,22 @@ runs:
             echo "## ⚙️ Misconfigurations"
             echo "<details><summary>🟠 View all $MISCONF finding(s)</summary>"
             echo ""
-            echo "| Severity | ID | Title | File |"
-            echo "|----------|----|-------|------|"
+            echo "| Severity | ID | Title | File | Line | Resolution |"
+            echo "|----------|----|-------|------|:----:|------------|"
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '
+            def clean: tostring | gsub("[\r\n|]"; " ");
             .Results[]? |
             .Target as $t |
             .Misconfigurations[]? |
             select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-            "| \(.Severity) | [\(.ID)](\(.PrimaryURL)) | \(.Title) | \($t) |"
+            (
+              if (.PrimaryURL // "") == ""
+              then (.ID // "Unknown")
+              else "[\(.ID // "Unknown")](\(.PrimaryURL))"
+              end
+            ) as $id |
+            "| \(.Severity) | \($id) | \(.Title // "-" | clean) | \($t | sub("^\\.trivy-scope/"; "") | clean) | \(.CauseMetadata.StartLine // "-") | \(.Resolution // "-" | clean) |"
           ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
         fi
@@ -267,14 +350,15 @@ runs:
             echo "## 🔑 Secrets"
             echo "<details><summary>🔑 View all $SECRET secret(s)</summary>"
             echo ""
-            echo "| Rule ID | Severity | Title | File |"
-            echo "|---------|----------|-------|------|"
+            echo "| Rule ID | Severity | Title | File | Line |"
+            echo "|---------|----------|-------|------|:----:|"
           } >> "$GITHUB_STEP_SUMMARY"
           jq -r '
+            def clean: tostring | gsub("[\r\n|]"; " ");
             .Results[]? |
             .Target as $t |
             .Secrets[]? |
-            "| \(.RuleID) | \(.Severity) | \(.Title) | \($t) |"
+            "| \(.RuleID // "-" | clean) | \(.Severity // "-" | clean) | \(.Title // "-" | clean) | \($t | sub("^\\.trivy-scope/"; "") | clean) | \(.StartLine // "-") |"
           ' trivy-fs.json >> "$GITHUB_STEP_SUMMARY" || true
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
         fi
@@ -284,15 +368,23 @@ runs:
             echo "## 🐳 Image Vulnerabilities"
             echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
             echo ""
-            echo "| Severity | CVE | Package | Installed | Fixed in |"
-            echo "|----------|-----|---------|-----------|----------|"
+            echo "| Image | Severity | CVE | Package | Installed | Fixed in |"
+            echo "|-------|----------|-----|---------|-----------|----------|"
           } >> "$GITHUB_STEP_SUMMARY"
           for f in trivy-image-*.json; do
             [ -f "$f" ] || continue
             jq -r '
+              def clean: tostring | gsub("[\r\n|]"; " ");
+              .ArtifactName as $image |
               .Results[]?.Vulnerabilities[]? |
               select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-              "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+              (
+                if (.PrimaryURL // "") == ""
+                then (.VulnerabilityID // "Unknown")
+                else "[\(.VulnerabilityID // "Unknown")](\(.PrimaryURL))"
+                end
+              ) as $cve |
+              "| \($image // "-" | clean) | \(.Severity) | \($cve) | \(.PkgName // "-" | clean) | \(.InstalledVersion // "-" | clean) | \(if (.FixedVersion // "") == "" then "-" else (.FixedVersion | clean) end) |"
             ' "$f" >> "$GITHUB_STEP_SUMMARY" || true
           done
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
@@ -320,6 +412,55 @@ runs:
 
         echo "MAIL_RECEIVERS=$CLEAN" >> "$GITHUB_ENV"
     # ── 8. Mail full report ─────────────────────────────────────────────────
+    - name: Build mail report
+      if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
+      shell: bash
+      env:
+        REPORT_REPOSITORY: ${{ github.repository }}
+        REPORT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPORT_PR_TITLE: ${{ github.event.pull_request.title }}
+        REPORT_AUTHOR: ${{ github.actor }}
+        REPORT_COMMIT: ${{ github.sha }}
+        REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REPORT_SEVERITY: ${{ inputs.severity }}
+      run: |
+        {
+          echo "Trivy Security Scan — $SCAN_STATUS"
+          echo "==============================================="
+          echo "Repository : $REPORT_REPOSITORY"
+          echo "PR         : #$REPORT_PR_NUMBER — $REPORT_PR_TITLE"
+          echo "Author     : $REPORT_AUTHOR"
+          echo "Commit     : $REPORT_COMMIT"
+          echo "Run URL    : $REPORT_RUN_URL"
+          echo ""
+          echo "Findings summary"
+          echo "----------------"
+          echo "Secrets                                    : ${SECRET:-0}"
+          echo "Vulnerabilities fs ($REPORT_SEVERITY) : ${VULN:-0}"
+          echo "Misconfigurations ($REPORT_SEVERITY)  : ${MISCONF:-0}"
+          echo "Vulnerabilities image ($REPORT_SEVERITY) : ${IMAGE_VULN:-0}"
+          echo ""
+          echo "Next actions"
+          echo "------------"
+
+          if [ "${SECRET:-0}" -gt 0 ]; then
+            echo "- Rotate or revoke exposed credentials immediately, remove them from source, and move them to GitHub Secrets, Vault, or environment variables."
+          fi
+          if [ "${VULN:-0}" -gt 0 ]; then
+            echo "- Update or replace affected filesystem packages. Use the Fixed in version when Trivy provides one."
+          fi
+          if [ "${MISCONF:-0}" -gt 0 ]; then
+            echo "- Apply the recommended remediation to each reported configuration file."
+          fi
+          if [ "${IMAGE_VULN:-0}" -gt 0 ]; then
+            echo "- Update affected image packages or the base image, rebuild and publish the image, then rerun the workflow."
+          fi
+
+          echo "- Push a remediation commit and wait for the Trivy workflow to pass before merging."
+          echo ""
+          echo "Open the workflow run above and read its Summary for affected packages, files, lines, and remediation links."
+        } > trivy-mail-report.txt
+
     - name: Mail report
       if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
       uses: dawidd6/action-send-mail@v16
@@ -331,23 +472,7 @@ runs:
         subject: "[Trivy] ${{ env.SCAN_STATUS }} — PR #${{ github.event.pull_request.number }} (${{ github.repository }})"
         to: ${{ env.MAIL_RECEIVERS }}
         from: Security Bot <${{ inputs.mail-username }}>
-        body: |
-          Trivy Security Scan — ${{ env.SCAN_STATUS }}
-          ===============================================
-          Repository : ${{ github.repository }}
-          PR         : #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
-          Author     : ${{ github.actor }}
-          Commit     : ${{ github.sha }}
-          Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Findings summary
-          ----------------
-          Secrets                                    : ${{ env.SECRET }}
-          Vulnerabilities fs (${{ inputs.severity }}) : ${{ env.VULN }}
-          Misconfigurations (${{ inputs.severity }})  : ${{ env.MISCONF }}
-          Vulnerabilities image (${{ inputs.severity }}) : ${{ env.IMAGE_VULN }}
-
-          See the Summary tab of the run above for full details.
+        body: file://trivy-mail-report.txt
 
     # ── 9. Build + mail secret alert → IT team ─────────────────────────────
     - name: Build secret alert body
