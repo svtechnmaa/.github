@@ -1,0 +1,189 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [$default-branch]
+  pull_request:
+    branches: [$default-branch]
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: Commit SHA to build. Defaults to the triggered commit.
+        required: false
+        type: string
+      run_test:
+        description: Run the repository test command.
+        required: false
+        default: true
+        type: boolean
+      keep_image:
+        description: Keep the commit image in GHCR when tests fail.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  COMMIT_FULL_ID: ${{ inputs.commit_id || github.sha }}
+  IMAGE_NAME: ${{ vars.CI_IMAGE_NAME || github.event.repository.name }}
+  CONTAINER_NAME: ${{ vars.CI_CONTAINER_NAME || github.event.repository.name }}
+  CONTAINER_MAPPING_PORT: ${{ vars.CI_CONTAINER_MAPPING_PORT || '80:80' }}
+  DOCKERFILE_PATH: ${{ vars.CI_DOCKERFILE_PATH || './Dockerfile' }}
+
+jobs:
+  build:
+    name: Build image
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-dind' }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      actions: read
+    outputs:
+      check_no_ci: ${{ steps.build.outputs.check_no_ci }}
+      check_no_scan: ${{ steps.build.outputs.check_no_scan }}
+      check_no_cache: ${{ steps.build.outputs.check_no_cache }}
+      is_latest_or_release_image: ${{ steps.build.outputs.is_latest_or_release_image }}
+      image_ref: ${{ steps.build.outputs.image_ref }}
+      commit_short_id: ${{ steps.build.outputs.commit_short_id }}
+    steps:
+      - name: Build, scan, and publish image
+        id: build
+        uses: svtechnmaa/.github/actions/run_build@main
+        with:
+          image_name: ${{ env.IMAGE_NAME }}
+          container_name: ${{ env.CONTAINER_NAME }}
+          container_mapping_port: ${{ env.CONTAINER_MAPPING_PORT }}
+          dockerfile_path: ${{ env.DOCKERFILE_PATH }}
+          commit_id: ${{ env.COMMIT_FULL_ID }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          push_token: ${{ secrets.PUSH_TOKEN }}
+          docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          docker_hub_access_token: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+          trivy_server: ${{ secrets.TRIVY_SERVER }}
+          mail_username: ${{ vars.MAIL_USERNAME }}
+          mail_password: ${{ secrets.MAIL_PASSWORD }}
+          default_mail_recipients: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+
+  test:
+    name: Test image
+    needs: build
+    if: >-
+      needs.build.result == 'success' &&
+      needs.build.outputs.check_no_ci != 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.run_test == true)
+    runs-on: ${{ vars.CI_TEST_RUNNER || 'robot-dind' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT_FULL_ID }}
+          fetch-depth: 0
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull commit image
+        run: docker pull "${{ needs.build.outputs.image_ref }}"
+      - name: Run application container
+        uses: svtechnmaa/.github/actions/run_docker_container@main
+        with:
+          imageName: ${{ needs.build.outputs.image_ref }}
+          containerName: ${{ env.CONTAINER_NAME }}
+          containerMappingPort: ${{ env.CONTAINER_MAPPING_PORT }}
+      - name: Run repository tests
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ vars.CI_TEST_COMMAND || 'robot tests/' }}
+        run: bash -euo pipefail -c "${TEST_COMMAND}"
+      - name: Delete commit image after test failure
+        if: failure() && inputs.keep_image != true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_TAG: ${{ needs.build.outputs.commit_short_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ needs.build.outputs.is_latest_or_release_image }}" == "true" ]]; then
+            echo "The image is protected by latest or a release tag; it will not be deleted."
+            exit 0
+          fi
+          package_name="${GITHUB_REPOSITORY##*/}"
+          owner_endpoint="users"
+          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
+            owner_endpoint="orgs"
+          fi
+          versions_url="${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions?per_page=100"
+          version_id="$(curl --silent --show-error --fail \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            "${versions_url}" \
+            | jq -r --arg tag "${COMMIT_TAG}" \
+              '[.[] | select((.metadata.container.tags // []) | index($tag))][0].id // empty')"
+          if [[ -n "${version_id}" ]]; then
+            curl --silent --show-error --fail --request DELETE \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              "${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions/${version_id}"
+            echo "Deleted GHCR package version ${version_id}."
+          else
+            echo "No GHCR package version found for tag ${COMMIT_TAG}."
+          fi
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_number }}
+          path: |
+            output.xml
+            log.html
+            report.html
+          if-no-files-found: ignore
+
+  release:
+    name: Publish release image
+    needs: [build, test]
+    if: >-
+      needs.build.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.build.outputs.check_no_ci != 'true' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      vars.CI_ENABLE_RELEASE == 'true'
+    runs-on: ${{ vars.CI_RELEASE_RUNNER || 'ubuntu-dind' }}
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create semantic release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to GitHub Container Registry
+        if: steps.semantic.outputs.new_release_published == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote release image
+        if: steps.semantic.outputs.new_release_published == 'true'
+        env:
+          REPO: ${{ github.repository }}
+          COMMIT_IMAGE: ${{ needs.build.outputs.image_ref }}
+          RELEASE_TAG: v${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          docker pull "${COMMIT_IMAGE}"
+          docker tag "${COMMIT_IMAGE}" "ghcr.io/${REPO}:${RELEASE_TAG}"
+          docker tag "${COMMIT_IMAGE}" "ghcr.io/${REPO}:latest"
+          docker push "ghcr.io/${REPO}:${RELEASE_TAG}"
+          docker push "ghcr.io/${REPO}:latest"

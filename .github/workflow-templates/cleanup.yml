@@ -1,0 +1,71 @@
+name: GHCR Image Cleanup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 1'
+
+permissions:
+  packages: write
+
+env:
+  CLEANUP_RETENTION_DAYS: ${{ vars.CI_GHCR_CLEANUP_RETENTION_DAYS || '7' }}
+  TEST_TAG_PREFIX: ${{ vars.CI_GHCR_TEST_TAG_PREFIX || 'test-v' }}
+  PACKAGE_NAME: ${{ vars.CI_GHCR_PACKAGE_NAME || github.event.repository.name }}
+
+jobs:
+  cleanup:
+    name: Delete expired test images
+    runs-on: ${{ vars.CI_GHCR_CLEANUP_RUNNER || 'ubuntu-dind' }}
+    steps:
+      - name: Delete old test images
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "${CLEANUP_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
+            echo "CI_GHCR_CLEANUP_RETENTION_DAYS must be a non-negative integer." >&2
+            exit 1
+          fi
+
+          owner_endpoint="users"
+          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
+            owner_endpoint="orgs"
+          fi
+
+          versions_url="${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions?per_page=100"
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+
+          curl --silent --show-error --fail \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${versions_url}" > "${response_file}"
+
+          jq -c \
+            --arg prefix "${TEST_TAG_PREFIX}" \
+            --argjson retention_days "${CLEANUP_RETENTION_DAYS}" \
+            '.[]
+             | (.metadata.container.tags // []) as $tags
+             | select(($tags | index("latest")) == null)
+             | select(($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | not)
+             | select($tags | any(startswith($prefix)))
+             | select((.updated_at | fromdateiso8601) < (now - ($retention_days * 24 * 60 * 60)))
+             | {id, tags: $tags, updated_at}' \
+            "${response_file}" |
+          while IFS= read -r image; do
+            version_id="$(jq -r '.id' <<< "${image}")"
+            tags="$(jq -r '.tags | join(", ")' <<< "${image}")"
+            updated_at="$(jq -r '.updated_at' <<< "${image}")"
+
+            echo "Deleting package version ${version_id} (tags: ${tags}, updated: ${updated_at})"
+            curl --silent --show-error --fail --request DELETE \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions/${version_id}"
+            sleep 1
+          done
