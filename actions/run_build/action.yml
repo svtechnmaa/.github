@@ -1,0 +1,323 @@
+name: Build, scan, run, and publish a Docker image
+description: >-
+  Builds, optionally scans and starts, and publishes a Docker image to GitHub
+  Container Registry with commit and test tags.
+
+inputs:
+  image_name:
+    description: Local Docker image name. Defaults to the repository name.
+    required: false
+    default: ""
+  container_name:
+    description: Container name used for the startup check. Defaults to image_name.
+    required: false
+    default: ""
+  container_mapping_port:
+    description: Docker port mapping used for the startup check.
+    required: false
+    default: "80:80"
+  build_context:
+    description: Docker build context.
+    required: false
+    default: "."
+  dockerfile_path:
+    description: Path to the Dockerfile.
+    required: false
+    default: "./Dockerfile"
+  commit_id:
+    description: Commit to check out and build. Defaults to github.sha.
+    required: false
+    default: ""
+  enable_scans:
+    description: Run the shared Dockerfile and image Trivy scans.
+    required: false
+    default: "true"
+  run_container:
+    description: Start the built image and verify that its container stays running.
+    required: false
+    default: "true"
+  github_token:
+    description: Token used to read and publish GHCR packages.
+    required: false
+    default: ""
+  push_token:
+    description: Token used to query the current Actions job. Defaults to github_token.
+    required: false
+    default: ""
+  docker_hub_username:
+    description: Docker Hub username. Login is skipped when either credential is empty.
+    required: false
+    default: ""
+  docker_hub_access_token:
+    description: Docker Hub access token.
+    required: false
+    default: ""
+  trivy_server:
+    description: Trivy server URL. The image scan falls back to a local scan when unavailable.
+    required: false
+    default: ""
+  mail_username:
+    description: SMTP username used by the shared Trivy scan actions.
+    required: false
+    default: ""
+  mail_password:
+    description: SMTP password used by the shared Trivy scan actions.
+    required: false
+    default: ""
+  default_mail_recipients:
+    description: Additional comma-separated vulnerability report recipients.
+    required: false
+    default: ""
+
+outputs:
+  check_no_ci:
+    description: Whether the commit message contains no-ci.
+    value: ${{ steps.check_commit_message.outputs.no_ci }}
+  check_no_scan:
+    description: Whether the commit message contains no-scan.
+    value: ${{ steps.check_commit_message.outputs.no_scan }}
+  check_no_cache:
+    description: Whether the commit message contains no-cache.
+    value: ${{ steps.check_commit_message.outputs.no_cache }}
+  is_image_tag_by_commit_id_existed:
+    description: Whether GHCR already contained an image tagged with the short commit ID.
+    value: ${{ steps.check_existing_image.outputs.image_exists }}
+  is_latest_or_release_image:
+    description: Whether the matching GHCR image also has latest or a semantic-version tag.
+    value: ${{ steps.check_existing_image.outputs.is_latest_or_release_image }}
+  commit_short_id:
+    description: Short ID of the commit that was built.
+    value: ${{ steps.prepare.outputs.commit_short_id }}
+  image_ref:
+    description: GHCR image reference tagged with the short commit ID.
+    value: ${{ steps.prepare.outputs.image_ref }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.commit_id || github.sha }}
+        fetch-depth: 0
+
+    - name: Prepare build metadata
+      id: prepare
+      shell: bash
+      env:
+        INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        INPUT_CONTAINER_NAME: ${{ inputs.container_name }}
+      run: |
+        set -euo pipefail
+        repo="${GITHUB_REPOSITORY,,}"
+        commit_full_id="$(git rev-parse HEAD)"
+        commit_short_id="$(git rev-parse --short HEAD)"
+        image_name="${INPUT_IMAGE_NAME:-${repo#*/}}"
+        image_name="${image_name,,}"
+        container_name="${INPUT_CONTAINER_NAME:-${image_name}}"
+        image_test_tag="test-v${GITHUB_RUN_NUMBER}"
+        image_ref="ghcr.io/${repo}:${commit_short_id}"
+        {
+          echo "REPO=${repo}"
+          echo "COMMIT_FULL_ID=${commit_full_id}"
+          echo "COMMIT_SHORT_ID=${commit_short_id}"
+          echo "IMAGE_NAME=${image_name}"
+          echo "CONTAINER_NAME=${container_name}"
+          echo "IMAGE_TEST_TAG=${image_test_tag}"
+        } >> "${GITHUB_ENV}"
+        {
+          echo "commit_short_id=${commit_short_id}"
+          echo "image_ref=${image_ref}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Check commit message
+      id: check_commit_message
+      shell: bash
+      run: |
+        set -euo pipefail
+        commit_message="$(git log -1 --pretty=%B "${COMMIT_FULL_ID}")"
+        no_ci=false
+        no_scan=false
+        no_cache=false
+        if [[ "${commit_message}" == *"no-ci"* ]]; then no_ci=true; fi
+        if [[ "${commit_message}" == *"no-scan"* ]]; then no_scan=true; fi
+        if [[ "${commit_message}" == *"no-cache"* ]]; then no_cache=true; fi
+        {
+          echo "no_ci=${no_ci}"
+          echo "no_scan=${no_scan}"
+          echo "no_cache=${no_cache}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Check existing image in GHCR
+      id: check_existing_image
+      if: steps.check_commit_message.outputs.no_ci != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token || github.token }}
+        OWNER_TYPE: ${{ github.event.repository.owner.type }}
+      run: |
+        set -euo pipefail
+        package_name="${REPO#*/}"
+        owner_endpoint="users"
+        if [[ "${OWNER_TYPE}" == "Organization" ]]; then owner_endpoint="orgs"; fi
+        response_file="$(mktemp)"
+        trap 'rm -f "${response_file}"' EXIT
+        status="$(curl --silent --show-error --output "${response_file}" --write-out '%{http_code}' \
+          --header "Authorization: Bearer ${GH_TOKEN}" \
+          --header "Accept: application/vnd.github+json" \
+          --header "X-GitHub-Api-Version: 2022-11-28" \
+          "${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions?per_page=100")"
+        if [[ "${status}" == "404" ]]; then
+          echo "image_exists=false" >> "${GITHUB_OUTPUT}"
+          echo "is_latest_or_release_image=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        if [[ "${status}" != "200" ]]; then
+          cat "${response_file}" >&2
+          exit 1
+        fi
+        existing_image="$(jq -c --arg tag "${COMMIT_SHORT_ID}" \
+          '[.[] | select((.metadata.container.tags // []) | index($tag))][0] // empty' "${response_file}")"
+        if [[ -z "${existing_image}" ]]; then
+          echo "image_exists=false" >> "${GITHUB_OUTPUT}"
+          echo "is_latest_or_release_image=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        protected_image="$(jq -r '(.metadata.container.tags // []) | map(. == "latest" or test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | any' <<< "${existing_image}")"
+        echo "image_exists=true" >> "${GITHUB_OUTPUT}"
+        echo "is_latest_or_release_image=${protected_image}" >> "${GITHUB_OUTPUT}"
+
+    - name: Determine whether a build is required
+      id: build_plan
+      if: steps.check_commit_message.outputs.no_ci != 'true'
+      shell: bash
+      env:
+        IMAGE_EXISTS: ${{ steps.check_existing_image.outputs.image_exists }}
+      run: |
+        should_build=false
+        if [[ "${GITHUB_EVENT_NAME}" == "push" || "${GITHUB_EVENT_NAME}" == "pull_request" || "${IMAGE_EXISTS}" != "true" ]]; then
+          should_build=true
+        fi
+        echo "should_build=${should_build}" >> "${GITHUB_OUTPUT}"
+
+    - name: Get job ID
+      id: get_job_id
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.enable_scans == 'true' &&
+        steps.check_commit_message.outputs.no_scan != 'true'
+      shell: bash
+      env:
+        ACTIONS_TOKEN: ${{ inputs.push_token || inputs.github_token || github.token }}
+      run: |
+        set -euo pipefail
+        job_id="$(curl --silent --show-error --fail \
+          --header "Authorization: Bearer ${ACTIONS_TOKEN}" \
+          --header "Accept: application/vnd.github+json" \
+          "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+          | jq -r --arg job "${GITHUB_JOB}" '[.jobs[] | select(.name == $job)][0].id // empty')"
+        echo "job_id=${job_id}" >> "${GITHUB_OUTPUT}"
+
+    - name: Determine commit author
+      id: commit_author
+      if: steps.build_plan.outputs.should_build == 'true'
+      shell: bash
+      run: |
+        {
+          echo "email=$(git show -s --format='%ae' "${COMMIT_FULL_ID}")"
+          echo "name=$(git show -s --format='%aN' "${COMMIT_FULL_ID}")"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Login to Docker Hub
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.docker_hub_username != '' &&
+        inputs.docker_hub_access_token != ''
+      uses: docker/login-action@v3
+      with:
+        registry: docker.io
+        username: ${{ inputs.docker_hub_username }}
+        password: ${{ inputs.docker_hub_access_token }}
+
+    - name: Login to GitHub Container Registry
+      if: steps.build_plan.outputs.should_build == 'true'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ inputs.github_token || github.token }}
+
+    - name: Build Docker image without cache
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        steps.check_commit_message.outputs.no_cache == 'true'
+      shell: bash
+      env:
+        BUILD_CONTEXT: ${{ inputs.build_context }}
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+      run: docker build --no-cache --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}" "${BUILD_CONTEXT}"
+
+    - name: Build Docker image with cache
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        steps.check_commit_message.outputs.no_cache != 'true'
+      shell: bash
+      env:
+        BUILD_CONTEXT: ${{ inputs.build_context }}
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+      run: |
+        docker pull "ghcr.io/${REPO}:latest" || true
+        docker build --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "ghcr.io/${REPO}:latest" \
+          --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}" "${BUILD_CONTEXT}"
+
+    - name: Scan Dockerfile using Trivy
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.enable_scans == 'true' &&
+        steps.check_commit_message.outputs.no_scan != 'true'
+      uses: svtechnmaa/.github/actions/run_trivy_scan_dockerfile@main
+      with:
+        dockerfile_path: ${{ inputs.dockerfile_path }}
+        commit_id: ${{ env.COMMIT_FULL_ID }}
+        mail_username: ${{ inputs.mail_username }}
+        mail_password: ${{ inputs.mail_password }}
+        mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
+        commit_author_name: ${{ steps.commit_author.outputs.name }}
+        job_id: ${{ steps.get_job_id.outputs.job_id }}
+
+    - name: Scan Docker image using Trivy
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.enable_scans == 'true' &&
+        steps.check_commit_message.outputs.no_scan != 'true'
+      uses: svtechnmaa/.github/actions/run_trivy_scan_image@main
+      with:
+        trivy_server: ${{ inputs.trivy_server }}
+        image_name: ${{ env.IMAGE_NAME }}
+        image_tag: latest
+        commit_id: ${{ env.COMMIT_FULL_ID }}
+        mail_username: ${{ inputs.mail_username }}
+        mail_password: ${{ inputs.mail_password }}
+        mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
+        commit_author_name: ${{ steps.commit_author.outputs.name }}
+        job_id: ${{ steps.get_job_id.outputs.job_id }}
+
+    - name: Run application container
+      if: >-
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.run_container == 'true'
+      uses: svtechnmaa/.github/actions/run_docker_container@main
+      with:
+        imageName: ${{ env.IMAGE_NAME }}
+        containerName: ${{ env.CONTAINER_NAME }}
+        containerMappingPort: ${{ inputs.container_mapping_port }}
+
+    - name: Push image to GitHub Container Registry
+      if: steps.build_plan.outputs.should_build == 'true'
+      shell: bash
+      run: |
+        docker tag "${IMAGE_NAME}:latest" "ghcr.io/${REPO}:${IMAGE_TEST_TAG}"
+        docker tag "${IMAGE_NAME}:latest" "ghcr.io/${REPO}:${COMMIT_SHORT_ID}"
+        docker push "ghcr.io/${REPO}:${IMAGE_TEST_TAG}"
+        docker push "ghcr.io/${REPO}:${COMMIT_SHORT_ID}"
