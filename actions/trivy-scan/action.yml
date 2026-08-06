@@ -275,12 +275,11 @@ runs:
         MISCONF="${MISCONF:-0}"
         IMAGE_VULN="${IMAGE_VULN:-0}"
         TOTAL=$((SECRET + VULN + MISCONF + IMAGE_VULN))
-        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-        SECURITY_URL="${{ github.server_url }}/${{ github.repository }}/security/code-scanning"
 
         {
           echo "# 🔍 Trivy — $SCAN_STATUS"
+          echo ""
+          echo "## 1. Summary"
           echo ""
           echo "**PR:** #${{ github.event.pull_request.number }} · **Commit:** \`${{ github.sha }}\` · **Author:** \`${{ github.actor }}\`"
           echo ""
@@ -295,67 +294,9 @@ runs:
           echo ""
         } >> "$GITHUB_STEP_SUMMARY"
 
-        if [ "$TOTAL" -gt 0 ]; then
-          {
-            echo "## Next actions"
-            echo ""
-            echo "This PR is blocked by the findings below. Complete the relevant actions, then push a new commit to rerun the scan."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$SECRET" -gt 0 ]; then
-            {
-              echo "### 🔑 Secrets"
-              echo ""
-              echo "1. Rotate or revoke the exposed credential immediately."
-              echo "2. Remove it from the source code and replace it with GitHub Secrets, Vault, or an environment variable."
-              echo "3. Check the reported file and line in **Secrets** below. Do not paste the secret into comments, logs, or the PR description."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "$VULN" -gt 0 ]; then
-            {
-              echo "### 🛡️ Filesystem vulnerabilities"
-              echo ""
-              echo "Update or replace each package listed in **Vulnerabilities** below. Use the version in **Fixed in** when Trivy provides one; findings without a fixed version remain blocking."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "$MISCONF" -gt 0 ]; then
-            {
-              echo "### ⚙️ Misconfigurations"
-              echo ""
-              echo "Apply the **Resolution** to the reported file and line in **Misconfigurations** below, then verify the configuration still behaves as expected."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "$IMAGE_VULN" -gt 0 ]; then
-            {
-              echo "### 🐳 Image vulnerabilities"
-              echo ""
-              echo "Update the packages listed in **Image Vulnerabilities** or update the base image, rebuild and publish the image, then rerun this workflow with the new image reference."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          {
-            echo "Push the remediation commit and wait for this workflow to pass before merging."
-            echo ""
-            if [ -n "${{ github.event.pull_request.number }}" ]; then
-              echo "[View changed files](${PR_URL}/files) · [View workflow run](${RUN_URL}) · [View code scanning alerts](${SECURITY_URL})"
-            else
-              echo "[View workflow run](${RUN_URL}) · [View code scanning alerts](${SECURITY_URL})"
-            fi
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        fi
-
         if [ "$VULN" -gt 0 ] && [ -f trivy-fs.json ]; then
           {
-            echo "## 🛡️ Vulnerabilities"
+            echo "### 🛡️ Vulnerabilities"
             echo "<details><summary>🔴 View all $VULN finding(s)</summary>"
             echo ""
             echo "| Severity | CVE | Package | Installed | Fixed in | Target |"
@@ -380,7 +321,7 @@ runs:
 
         if [ "$MISCONF" -gt 0 ] && [ -f trivy-fs.json ]; then
           {
-            echo "## ⚙️ Misconfigurations"
+            echo "### ⚙️ Misconfigurations"
             echo "<details><summary>🟠 View all $MISCONF finding(s)</summary>"
             echo ""
             echo "| Severity | ID | Title | File | Line | Resolution |"
@@ -405,7 +346,7 @@ runs:
 
         if [ "$SECRET" -gt 0 ] && [ -f trivy-fs.json ]; then
           {
-            echo "## 🔑 Secrets"
+            echo "### 🔑 Secrets"
             echo "<details><summary>🔑 View all $SECRET secret(s)</summary>"
             echo ""
             echo "| Rule ID | Severity | Title | File | Line |"
@@ -423,7 +364,7 @@ runs:
 
         if [ "$IMAGE_VULN" -gt 0 ]; then
           {
-            echo "## 🐳 Image Vulnerabilities"
+            echo "### 🐳 Image Vulnerabilities"
             echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
             echo ""
             echo "| Image | Severity | CVE | Package | Installed | Fixed in |"
@@ -446,6 +387,34 @@ runs:
             ' "$f" >> "$GITHUB_STEP_SUMMARY" || true
           done
           { echo ""; echo "</details>"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$TOTAL" -gt 0 ]; then
+          ACTION_NUMBER=1
+          {
+            echo "## 2. Next action"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SECRET" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix secrets ($SECRET):** Rotate or revoke exposed credentials, remove them from source, and use GitHub Secrets, Vault, or environment variables. Use the reported file and line in **Secrets** above." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ $((VULN + IMAGE_VULN)) -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix vulnerabilities ($((VULN + IMAGE_VULN))):** Open the linked CVE(s) above, update to **Fixed in** when available, or update the base image, then rebuild." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ "$MISCONF" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix misconfigurations ($MISCONF):** Open the linked rule ID(s) above and apply the reported **Resolution** to each file and line." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          {
+            echo ""
+            echo "Push the fixes and rerun the scan before merging."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
         fi
 
     # ── 6. Get commit author email ──────────────────────────────────────────

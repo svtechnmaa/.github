@@ -128,11 +128,12 @@ runs:
         IMAGE_VULN="${IMAGE_VULN:-0}"
         SCAN_OK="${SCAN_OK:-false}"
         SCAN_STATUS="${SCAN_STATUS:-⚠️ Scan failed}"
-        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${REPORT_COMMIT}"
 
         {
           echo "# 🐳 Trivy Image Scan — $SCAN_STATUS"
+          echo ""
+          echo "## 1. Summary"
           echo ""
           echo "**Image:** \`$REPORT_IMAGE_REF\` · **Commit:** [\`$REPORT_COMMIT\`]($COMMIT_URL) · **Author:** \`$REPORT_AUTHOR\`"
           echo ""
@@ -142,32 +143,9 @@ runs:
           echo ""
         } >> "$GITHUB_STEP_SUMMARY"
 
-        if [ "$SCAN_OK" != "true" ]; then
+        if [ "$IMAGE_VULN" -gt 0 ] && [ -f trivy-image-report.json ]; then
           {
-            echo "## Next actions"
-            echo ""
-            echo "1. Open the scan logs and resolve the Trivy server, registry authentication, image availability, or local database error."
-            echo "2. Rerun the workflow and confirm that a valid report is generated before relying on this result."
-            echo ""
-            echo "[View workflow run]($RUN_URL)"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        elif [ "$IMAGE_VULN" -gt 0 ] && [ -f trivy-image-report.json ]; then
-          {
-            echo "## Next actions"
-            echo ""
-            echo "1. Update each affected package to the version in **Fixed in** when available."
-            echo "2. If the package comes from the base image, update the \`FROM\` image and rebuild."
-            echo "3. Publish the remediated image, update the image reference, and rerun this workflow before deploying."
-            echo ""
-            if [ "${{ github.event.repository.private }}" = "false" ]; then
-              echo "[View workflow run]($RUN_URL) · [View code scanning alerts](${{ github.server_url }}/${{ github.repository }}/security/code-scanning)"
-            else
-              echo "[View workflow run]($RUN_URL)"
-            fi
-            echo ""
-            echo "## Findings"
-            echo ""
+            echo "### 🛡️ Vulnerabilities"
             echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
             echo ""
             echo "| Target | Severity | CVE | Package | Installed | Fixed in |"
@@ -193,11 +171,22 @@ runs:
             echo "</details>"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
-        else
+        fi
+
+        if [ "$SCAN_OK" != "true" ]; then
           {
-            echo "No action required. The image has no HIGH/CRITICAL findings."
+            echo "## 2. Next action"
             echo ""
-            echo "[View workflow run]($RUN_URL)"
+            echo "1. Fix the scan error shown in the logs, then rerun the scan before relying on this result."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$IMAGE_VULN" -gt 0 ]; then
+          {
+            echo "## 2. Next action"
+            echo ""
+            echo "1. **Fix vulnerabilities ($IMAGE_VULN):** Open the linked CVE(s) above, update to **Fixed in** when available, or update the base image, then rebuild and publish the image."
+            echo ""
+            echo "Rerun the scan before deploying."
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
         fi

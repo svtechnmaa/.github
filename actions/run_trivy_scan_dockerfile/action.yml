@@ -142,11 +142,12 @@ runs:
         SCAN_OK="${SCAN_OK:-false}"
         SCAN_STATUS="${SCAN_STATUS:-⚠️ Scan failed}"
         SCAN_PATH="${DOCKERFILE_SCAN_PATH:-$(dirname "$REPORT_DOCKERFILE")}"
-        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${REPORT_COMMIT}"
 
         {
           echo "# 🐳 Trivy Dockerfile Build Context — $SCAN_STATUS"
+          echo ""
+          echo "## 1. Summary"
           echo ""
           echo "**Dockerfile:** \`$REPORT_DOCKERFILE\` · **Scan path:** \`$SCAN_PATH\` · **Commit:** [\`$REPORT_COMMIT\`]($COMMIT_URL) · **Author:** \`$REPORT_AUTHOR\`"
           echo ""
@@ -158,75 +159,9 @@ runs:
           echo ""
         } >> "$GITHUB_STEP_SUMMARY"
 
-        if [ "$SCAN_OK" != "true" ]; then
-          {
-            echo "## Next actions"
-            echo ""
-            echo "1. Open the scan logs and verify the Dockerfile path, Trivy server, and local vulnerability database."
-            echo "2. Fix the scan error, rerun the workflow, and confirm that a valid report is generated."
-            echo ""
-            echo "[View workflow run]($RUN_URL)"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        elif [ "$TOTAL_FINDINGS" -gt 0 ] && [ -f trivy-report.json ]; then
-          {
-            echo "## Next actions"
-            echo ""
-            echo "This scan covers the Dockerfile and dependency manifests in its build context."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$SECRET" -gt 0 ]; then
-            {
-              echo "### 🔑 Secrets"
-              echo ""
-              echo "1. Rotate or revoke each exposed credential immediately."
-              echo "2. Remove it from the Dockerfile/build context and use BuildKit secrets, GitHub Secrets, Vault, or runtime environment variables."
-              echo "3. Do not paste the secret into logs, comments, or the PR description."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "$VULN" -gt 0 ]; then
-            {
-              echo "### 🛡️ Filesystem vulnerabilities"
-              echo ""
-              echo "Update or replace affected dependencies from the reported lockfile or manifest. Use **Fixed in** when Trivy provides a version."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "$MISCONF" -gt 0 ]; then
-            {
-              echo "### ⚙️ Dockerfile misconfigurations"
-              echo ""
-              echo "Apply the reported **Resolution** to each Dockerfile line, then rebuild and verify the image."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          {
-            echo "Push the remediation commit and rerun this workflow before merging or deploying."
-            echo ""
-            if [ "${{ github.event.repository.private }}" = "false" ]; then
-              echo "[View workflow run]($RUN_URL) · [View code scanning alerts](${{ github.server_url }}/${{ github.repository }}/security/code-scanning)"
-            else
-              echo "[View workflow run]($RUN_URL)"
-            fi
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        else
-          {
-            echo "No action required. The Dockerfile build context has no HIGH/CRITICAL findings."
-            echo ""
-            echo "[View workflow run]($RUN_URL)"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        fi
-
         if [ "$VULN" -gt 0 ] && [ -f trivy-report.json ]; then
           {
-            echo "## 🛡️ Filesystem vulnerabilities"
+            echo "### 🛡️ Filesystem vulnerabilities"
             echo ""
             echo "<details><summary>🔴 View all $VULN finding(s)</summary>"
             echo ""
@@ -257,7 +192,7 @@ runs:
 
         if [ "$MISCONF" -gt 0 ] && [ -f trivy-report.json ]; then
           {
-            echo "## ⚙️ Dockerfile misconfigurations"
+            echo "### ⚙️ Dockerfile misconfigurations"
             echo ""
             echo "<details><summary>🟠 View all $MISCONF finding(s)</summary>"
             echo ""
@@ -288,7 +223,7 @@ runs:
 
         if [ "$SECRET" -gt 0 ] && [ -f trivy-report.json ]; then
           {
-            echo "## 🔑 Secrets"
+            echo "### 🔑 Secrets"
             echo ""
             echo "<details><summary>🔑 View all $SECRET finding(s)</summary>"
             echo ""
@@ -307,6 +242,41 @@ runs:
           {
             echo ""
             echo "</details>"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$SCAN_OK" != "true" ]; then
+          {
+            echo "## 2. Next action"
+            echo ""
+            echo "1. Fix the scan error shown in the logs, then rerun the scan before relying on this result."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$TOTAL_FINDINGS" -gt 0 ]; then
+          ACTION_NUMBER=1
+          {
+            echo "## 2. Next action"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SECRET" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix secrets ($SECRET):** Rotate or revoke exposed credentials, remove them from the build context, and use BuildKit/GitHub Secrets, Vault, or environment variables. Use the reported file and line above." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ "$VULN" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix vulnerabilities ($VULN):** Open the linked CVE(s) above and update dependencies to **Fixed in** when available." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ "$MISCONF" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix misconfigurations ($MISCONF):** Open the linked rule ID(s) above and apply the reported **Resolution** to each Dockerfile line." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          {
+            echo ""
+            echo "Push the fixes and rerun the scan before merging or deploying."
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
         fi
