@@ -9,9 +9,9 @@ permissions:
   packages: write
 
 env:
-  CLEANUP_RETENTION_DAYS: ${{ vars.CI_GHCR_CLEANUP_RETENTION_DAYS || '7' }}
-  TEST_TAG_PREFIX: ${{ vars.CI_GHCR_TEST_TAG_PREFIX || 'test-v' }}
-  PACKAGE_NAME: ${{ vars.CI_GHCR_PACKAGE_NAME || github.event.repository.name }}
+  CLEANUP_RETENTION_DAYS: '7'
+  TEST_TAG_PREFIX: 'test-v'
+  PACKAGE_NAME: ${{ github.event.repository.name }}
 
 jobs:
   cleanup:
@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
 
           if ! [[ "${CLEANUP_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
-            echo "CI_GHCR_CLEANUP_RETENTION_DAYS must be a non-negative integer." >&2
+            echo "Cleanup retention days must be a non-negative integer." >&2
             exit 1
           fi
 
