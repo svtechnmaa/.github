@@ -91,12 +91,18 @@ outputs:
   image_ref:
     description: GHCR image reference tagged with the short commit ID.
     value: ${{ steps.prepare.outputs.image_ref }}
+  image_name:
+    description: Normalized lowercase local Docker image name.
+    value: ${{ steps.prepare.outputs.image_name }}
+  container_name:
+    description: Normalized container name used for the startup check.
+    value: ${{ steps.prepare.outputs.container_name }}
 
 runs:
   using: composite
   steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         ref: ${{ inputs.commit_id || github.sha }}
         fetch-depth: 0
@@ -128,6 +134,8 @@ runs:
         {
           echo "commit_short_id=${commit_short_id}"
           echo "image_ref=${image_ref}"
+          echo "image_name=${image_name}"
+          echo "container_name=${container_name}"
         } >> "${GITHUB_OUTPUT}"
 
     - name: Check commit message
@@ -233,7 +241,7 @@ runs:
         steps.build_plan.outputs.should_build == 'true' &&
         inputs.docker_hub_username != '' &&
         inputs.docker_hub_access_token != ''
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: docker.io
         username: ${{ inputs.docker_hub_username }}
@@ -241,7 +249,7 @@ runs:
 
     - name: Login to GitHub Container Registry
       if: steps.build_plan.outputs.should_build == 'true'
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}

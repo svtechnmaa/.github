@@ -16,7 +16,7 @@ env:
 jobs:
   cleanup:
     name: Delete expired test images
-    runs-on: ${{ vars.CI_GHCR_CLEANUP_RUNNER || 'ubuntu-dind' }}
+    runs-on: ubuntu-dind
     steps:
       - name: Delete old test images
         shell: bash

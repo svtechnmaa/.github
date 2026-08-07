@@ -1,0 +1,201 @@
+name: Publish chart updates
+description: >-
+  Updates and pushes image-version changes to a charts repository and a stacked
+  charts repository after a semantic release.
+
+inputs:
+  release_version:
+    description: Release image tag, for example v2.0.40.
+    required: true
+  charts_repository:
+    description: Full charts repository name, for example owner/charts.
+    required: true
+  charts_ref:
+    description: Branch or tag to update in the charts repository.
+    required: false
+    default: main
+  stacked_charts_repository:
+    description: Full stacked charts repository name.
+    required: true
+  stacked_charts_ref:
+    description: Branch or tag to update in the stacked charts repository.
+    required: false
+    default: master
+  utilities_repository:
+    description: Full CI utilities repository name.
+    required: true
+  utilities_ref:
+    description: Branch or tag of the CI utilities repository.
+    required: false
+    default: dev-jenkins
+  chart_values_file:
+    description: Values file path relative to the charts repository.
+    required: true
+  chart_image_repository:
+    description: Image repository value to update in the chart values file.
+    required: true
+  charts_repository_name:
+    description: Repository name passed to the stacked-chart release utility.
+    required: false
+    default: charts
+  stack_charts_string:
+    description: Chart identifier string passed to the stacked-chart release utility.
+    required: true
+  push_token:
+    description: Token used to clone and push the chart repositories.
+    required: true
+  gpg_private_key:
+    description: Private GPG key used to sign chart commits.
+    required: true
+  gpg_passphrase:
+    description: Optional passphrase for the GPG key.
+    required: false
+    default: ""
+  gpg_key_id:
+    description: GPG key fingerprint or ID used for git signing.
+    required: true
+  git_user_name:
+    description: Commit author name.
+    required: false
+    default: github-actions[bot]
+  git_user_email:
+    description: Commit author email.
+    required: false
+    default: 41898282+github-actions[bot]@users.noreply.github.com
+
+runs:
+  using: composite
+  steps:
+    - name: Install Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: latest
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+
+    - name: Clone charts repository
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.charts_repository }}
+        ref: ${{ inputs.charts_ref }}
+        token: ${{ inputs.push_token }}
+        path: charts
+
+    - name: Clone stacked charts repository
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.stacked_charts_repository }}
+        ref: ${{ inputs.stacked_charts_ref }}
+        token: ${{ inputs.push_token }}
+        path: stacked_charts
+
+    - name: Clone CI utilities repository
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ inputs.utilities_repository }}
+        ref: ${{ inputs.utilities_ref }}
+        token: ${{ inputs.push_token }}
+        path: SVTECH_CI_utilities
+
+    - name: Import GPG signing key
+      uses: crazy-max/ghaction-import-gpg@v6.2.0
+      with:
+        gpg_private_key: ${{ inputs.gpg_private_key }}
+        passphrase: ${{ inputs.gpg_passphrase }}
+        fingerprint: ${{ inputs.gpg_key_id }}
+
+    - name: Update image version in charts
+      shell: bash
+      env:
+        CHART_VALUES_FILE: ${{ inputs.chart_values_file }}
+        CHART_IMAGE_REPOSITORY: ${{ inputs.chart_image_repository }}
+        RELEASE_IMAGE_TAG: ${{ inputs.release_version }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        from pathlib import Path
+        import os
+
+        path = Path("charts") / os.environ["CHART_VALUES_FILE"]
+        repository = os.environ["CHART_IMAGE_REPOSITORY"].lower()
+        release_tag = os.environ["RELEASE_IMAGE_TAG"]
+        if not path.is_file():
+            raise SystemExit(f"Chart values file does not exist: {path}")
+        lines = path.read_text().splitlines(keepends=True)
+        for index, line in enumerate(lines[:-1]):
+            if line.strip() == f"repository: {repository}" and lines[index + 1].lstrip().startswith("tag:"):
+                indentation = lines[index + 1][:len(lines[index + 1]) - len(lines[index + 1].lstrip())]
+                newline = "\n" if lines[index + 1].endswith("\n") else ""
+                lines[index + 1] = f"{indentation}tag: {release_tag}{newline}"
+                break
+        else:
+            raise SystemExit(f"Could not find repository '{repository}' followed by a tag in {path}")
+        path.write_text("".join(lines))
+        PY
+
+    - name: Update stacked charts metadata
+      shell: bash
+      env:
+        CHARTS_REPOSITORY_NAME: ${{ inputs.charts_repository_name }}
+        STACK_CHARTS_STRING: ${{ inputs.stack_charts_string }}
+        PUSH_TOKEN: ${{ inputs.push_token }}
+      run: |
+        set -euo pipefail
+        python3 -m pip install requests pyyaml
+        python3 SVTECH_CI_utilities/auto_testing/python_script/public_helmchart_release.py \
+          --BUILD_VARS_PATH='.' \
+          --ID='.' \
+          --GITHUB_TOKEN="${PUSH_TOKEN}" \
+          --OWNER="${GITHUB_REPOSITORY_OWNER}" \
+          --charts_string="${STACK_CHARTS_STRING}" \
+          --REPO="${CHARTS_REPOSITORY_NAME}"
+
+    - name: Commit and push charts changes
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git_user_name }}
+        GIT_USER_EMAIL: ${{ inputs.git_user_email }}
+        CHARTS_REF: ${{ inputs.charts_ref }}
+        RELEASE_IMAGE_TAG: ${{ inputs.release_version }}
+        GPG_KEY_ID: ${{ inputs.gpg_key_id }}
+      run: |
+        set -euo pipefail
+        cd charts
+        helm repo index artifacthub
+        if [[ -n "$(git status --porcelain)" ]]; then
+          git config user.name "${GIT_USER_NAME}"
+          git config user.email "${GIT_USER_EMAIL}"
+          git config commit.gpgSign true
+          git config user.signingkey "${GPG_KEY_ID}"
+          git add .
+          git commit --no-verify -m "no-ci: Update image version to ${RELEASE_IMAGE_TAG}"
+          git push origin "${CHARTS_REF}"
+        else
+          echo "No chart changes to commit."
+        fi
+
+    - name: Commit and push stacked charts changes
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git_user_name }}
+        GIT_USER_EMAIL: ${{ inputs.git_user_email }}
+        STACK_CHARTS_REF: ${{ inputs.stacked_charts_ref }}
+        RELEASE_IMAGE_TAG: ${{ inputs.release_version }}
+        GPG_KEY_ID: ${{ inputs.gpg_key_id }}
+      run: |
+        set -euo pipefail
+        cd stacked_charts
+        if [[ -n "$(git status --porcelain)" ]]; then
+          git config user.name "${GIT_USER_NAME}"
+          git config user.email "${GIT_USER_EMAIL}"
+          git config commit.gpgSign true
+          git config user.signingkey "${GPG_KEY_ID}"
+          git add .
+          git commit -S -m "no-ci: Update image version to ${RELEASE_IMAGE_TAG}"
+          git push origin "${STACK_CHARTS_REF}"
+        else
+          echo "No stacked charts changes to commit."
+        fi
