@@ -114,19 +114,6 @@ runs:
         echo "finding_count=$TOTAL_FINDINGS" >> "$GITHUB_OUTPUT"
         echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
 
-    - name: Convert build context report to SARIF
-      id: convert_sarif
-      if: always() && steps.logging_vulns.outputs.scan_ok == 'true'
-      shell: bash
-      run: |
-        if trivy convert --format sarif trivy-report.json > trivy-report.sarif; then
-          echo "has_sarif=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "::warning::Unable to convert the Trivy build context report to SARIF."
-          echo "has_sarif=false" >> "$GITHUB_OUTPUT"
-        fi
-      continue-on-error: true
-
     - name: Write summary
       if: always()
       shell: bash
@@ -287,19 +274,7 @@ runs:
       env:
         REPORT_JOB_ID: ${{ inputs.job_id }}
       run: |
-        if [ "${{ github.event.repository.private }}" = "true" ]; then
-          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${REPORT_JOB_ID}" >> "$GITHUB_ENV"
-        else
-          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/security/code-scanning" >> "$GITHUB_ENV"
-        fi
-      continue-on-error: true
-
-    - name: Upload SARIF to Security tab
-      if: steps.logging_vulns.outputs.detected_vulns == 'true' && steps.convert_sarif.outputs.has_sarif == 'true' && github.event.repository.private == 'false'
-      uses: github/codeql-action/upload-sarif@v4
-      with:
-        sarif_file: trivy-report.sarif
-        category: trivy-dockerfile-build-context
+        echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${REPORT_JOB_ID}" >> "$GITHUB_ENV"
       continue-on-error: true
 
     - name: Clean noreply mail receivers

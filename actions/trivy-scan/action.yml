@@ -57,11 +57,6 @@ inputs:
     description: Days to retain the scan artifact
     required: false
     default: "30"
-  github-token:
-    description: 'GitHub token for SARIF upload and gh CLI'
-    required: false
-    default: ${{ github.token }}
-
 runs:
   using: composite
   steps:
@@ -218,26 +213,6 @@ runs:
           fi
         done
       continue-on-error: true
-    # ── 3b. Convert JSON → SARIF ────────────────────────────────────────────
-    - name: Convert scan results to SARIF
-      if: always()
-      shell: bash
-      run: |
-        # fs
-        if [ -f trivy-fs.json ]; then
-          if ! trivy convert --format sarif trivy-fs.json > trivy-fs.sarif; then
-            printf '%s\n' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"Trivy","informationUri":"https://trivy.dev","rules":[]}},"results":[]}]}' > trivy-fs.sarif
-          fi
-        fi
-
-        # image
-        for f in trivy-image-*.json; do
-          [ -f "$f" ] || continue
-          sarif="${f%.json}.sarif"
-          trivy convert --format sarif "$f" > "$sarif" || true
-        done
-      continue-on-error: true
-
     # ── 4. Parse findings ───────────────────────────────────────────────────
     - name: Parse findings
       shell: bash
@@ -535,33 +510,6 @@ runs:
         body: file://secret-alert.txt
 
     # ── 10. Upload scan artifacts ───────────────────────────────────────────
-    - name: Upload SARIF to GitHub Security (fs)
-      if: always()
-      continue-on-error: ${{ github.event.repository.visibility != 'public' }}
-      uses: github/codeql-action/upload-sarif@v4
-      with:
-        sarif_file: trivy-fs.sarif
-        category: trivy-fs
-
-    - name: Upload SARIF to GitHub Security (images)
-      if: always()
-      continue-on-error: ${{ github.event.repository.visibility != 'public' }}
-      shell: bash
-      run: |
-        for f in trivy-image-*.sarif; do
-          [ -f "$f" ] || continue
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/code-scanning/sarifs \
-            -f sarif="$(gzip -c "$f" | base64 -w0)" \
-            -f ref="${{ github.ref }}" \
-            -f commit_sha="${{ github.sha }}" \
-            -f tool_name="trivy-$(basename $f .sarif)"
-        done
-      env:
-        GH_TOKEN: ${{ inputs.github-token }} 
-
     - name: Upload scan artifacts
       if: always()
       uses: actions/upload-artifact@v7
