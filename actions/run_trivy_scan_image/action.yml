@@ -51,7 +51,7 @@ runs:
           echo "✅ Trivy server is UP"
           trivy image \
             --server "$TRIVY_SERVER" \
-            --timeout 5m \
+            --timeout 15m \
             --severity HIGH,CRITICAL \
             --format json \
             --output trivy-image-report.json \
@@ -60,7 +60,7 @@ runs:
         else
           echo "⚠️ Trivy server is unavailable. Falling back to local scan."
           trivy image \
-            --timeout 5m \
+            --timeout 15m \
             --severity HIGH,CRITICAL \
             --format json \
             --output trivy-image-report.json \
