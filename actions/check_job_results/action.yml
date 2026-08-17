@@ -1,4 +1,4 @@
-name: 'Check all jobs'
+name: 'Check job results'
 description: 'Check job results and fail when any job failed or was cancelled'
 inputs:
   jobs:
