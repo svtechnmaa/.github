@@ -1,0 +1,36 @@
+name: 'Check all jobs'
+description: 'Check job results and fail when any job failed or was cancelled'
+inputs:
+  jobs:
+    description: 'JSON representation of the needs context'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+  - name: Check job results
+    shell: bash
+    run: |
+      failed=false
+
+      while IFS=$'\t' read -r job result; do
+        echo "$job: $result"
+
+        case "$result" in
+          success|skipped)
+            ;;
+          failure|cancelled)
+            failed=true
+            ;;
+          *)
+            echo "Unknown result for $job: $result"
+            failed=true
+            ;;
+        esac
+      done < <(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<< "$JOBS")
+
+      if [[ "$failed" == "true" ]]; then
+        echo "One or more jobs failed or were cancelled."
+        exit 1
+      fi
+    env:
+      JOBS: ${{ inputs.jobs }}
