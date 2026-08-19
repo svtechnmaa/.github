@@ -5,7 +5,7 @@ export INSTALL_DIR="/tmp"
 echo "[HOOK] Running betterleaks (merge)..."
 
 # Ensure installed
-./hooks/install-betterleaks.sh
+./.githooks/install-betterleaks.sh
 
 # Run scan on the merge result staged in the index
 if $INSTALL_DIR/betterleaks git --staged --verbose; then
