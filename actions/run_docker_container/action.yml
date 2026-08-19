@@ -11,6 +11,10 @@ inputs:
     description: 'Port mapping for your container'
     required: true
     default: '80:80'
+  dockerOptions:
+    description: "Additional options passed to docker run"
+    required: false
+    default: ""
   timeout:
     description: 'The limit time (seconds) for waiting the container to be running, otherwise cancel the workflow'
     required: true
@@ -22,14 +26,15 @@ inputs:
 runs:
   using: "composite"
   steps:
-  - name: Run Tender app
+  - name: Run App
     shell: bash
     run: |
-      docker run -d --name $CONTAINER_NAME -p $CONTAINER_MAPPING_PORT $IMAGE_NAME
+      docker run -d --name $CONTAINER_NAME -p $CONTAINER_MAPPING_PORT $DOCKER_OPTIONS $IMAGE_NAME
     env:
       IMAGE_NAME: ${{ inputs.imageName }}
       CONTAINER_NAME: ${{ inputs.containerName }}
       CONTAINER_MAPPING_PORT: ${{ inputs.containerMappingPort }}
+      DOCKER_OPTIONS: ${{ inputs.dockerOptions }}
 
   - name: Wait for container to be running
     shell: bash
