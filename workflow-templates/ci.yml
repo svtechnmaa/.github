@@ -44,10 +44,10 @@ jobs:
       check_no_scan: ${{ steps.build.outputs.check_no_scan }}
       check_no_cache: ${{ steps.build.outputs.check_no_cache }}
       is_latest_or_release_image: ${{ steps.build.outputs.is_latest_or_release_image }}
-      image_ref: ${{ steps.build.outputs.image_ref }}
-      commit_short_id: ${{ steps.build.outputs.commit_short_id }}
-      image_name: ${{ steps.build.outputs.image_name }}
-      container_name: ${{ steps.build.outputs.container_name }}
+      image_ref: ${{ steps.resolve_build_image.outputs.image_ref }}
+      commit_short_id: ${{ steps.resolve_build_image.outputs.commit_short_id }}
+      image_name: ${{ steps.resolve_build_image.outputs.image_name }}
+      container_name: ${{ steps.resolve_build_image.outputs.container_name }}
     steps:
       - name: Build, scan, and publish image
         id: build
@@ -64,6 +64,19 @@ jobs:
           mail_username: ${{ vars.MAIL_USERNAME }}
           mail_password: ${{ secrets.MAIL_PASSWORD }}
           default_mail_recipients: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+      - name: Resolve built image reference
+        id: resolve_build_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_short_id="$(git rev-parse --short HEAD)"
+          image_name="${GITHUB_REPOSITORY##*/}"
+          image_name="${image_name,,}"
+          image_ref="ghcr.io/${GITHUB_REPOSITORY,,}:${commit_short_id}"
+          echo "commit_short_id=${commit_short_id}" >> "${GITHUB_OUTPUT}"
+          echo "image_name=${image_name}" >> "${GITHUB_OUTPUT}"
+          echo "container_name=${image_name}" >> "${GITHUB_OUTPUT}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
 
   test:
     name: Test image
@@ -81,17 +94,26 @@ jobs:
         with:
           ref: ${{ env.COMMIT_FULL_ID }}
           fetch-depth: 0
+      - name: Resolve commit image reference
+        id: resolve_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_short_id="$(git rev-parse --short HEAD)"
+          image_ref="ghcr.io/${GITHUB_REPOSITORY,,}:${commit_short_id}"
+          echo "commit_short_id=${commit_short_id}" >> "${GITHUB_OUTPUT}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull commit image
-        run: docker pull "${{ needs.build.outputs.image_ref }}"
+        run: docker pull "${{ steps.resolve_image.outputs.image_ref }}"
       - name: Run application container
         uses: svtechnmaa/.github/actions/run_docker_container@main
         with:
-          imageName: ${{ needs.build.outputs.image_ref }}
+          imageName: ${{ steps.resolve_image.outputs.image_ref }}
           containerName: ${{ needs.build.outputs.container_name }}
           containerMappingPort: ${{ env.CONTAINER_MAPPING_PORT }}
       - name: Run repository tests
@@ -103,7 +125,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COMMIT_TAG: ${{ needs.build.outputs.commit_short_id }}
+          COMMIT_TAG: ${{ steps.resolve_image.outputs.commit_short_id }}
         run: |
           set -euo pipefail
           if [[ "${{ needs.build.outputs.is_latest_or_release_image }}" == "true" ]]; then
@@ -159,6 +181,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Resolve commit image reference
+        id: resolve_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_short_id="$(git rev-parse --short HEAD)"
+          image_ref="ghcr.io/${GITHUB_REPOSITORY,,}:${commit_short_id}"
+          echo "commit_short_id=${commit_short_id}" >> "${GITHUB_OUTPUT}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
       - name: Create semantic release
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
@@ -175,7 +206,7 @@ jobs:
         if: steps.semantic.outputs.new_release_published == 'true'
         env:
           REPO: ${{ github.repository }}
-          COMMIT_IMAGE: ${{ needs.build.outputs.image_ref }}
+          COMMIT_IMAGE: ${{ steps.resolve_image.outputs.image_ref }}
           RELEASE_TAG: v${{ steps.semantic.outputs.new_release_version }}
         run: |
           set -euo pipefail

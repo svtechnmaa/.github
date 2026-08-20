@@ -1,11 +1,15 @@
-name: Dockerfile Scan and Mail
-description: Scan Dockerfile using Trivy and send mail if vulnerabilities detected
+name: Dockerfile and Build Context Scan
+description: Scan a Dockerfile build context for vulnerabilities, secrets, and misconfigurations with actionable summary and email
 
 inputs:
   dockerfile_path:
     description: "Path to the Dockerfile to scan"
     required: false
-    default: './Dockerfile'
+    default: "./Dockerfile"
+  trivy_server:
+    description: "Trivy server URL (if using server mode)"
+    required: false
+    default: ""
   mail_username:
     description: "SMTP username for sending email"
     required: true
@@ -16,7 +20,7 @@ inputs:
     description: "Name of the commit author to include in email"
     required: true
   mail_receivers:
-    description: "Mail addesses of recipients"
+    description: "Mail addresses of recipients"
     required: true
   commit_id:
     description: "Git commit ID associated with this scan"
@@ -25,116 +29,354 @@ inputs:
     description: "GitHub job ID for the current workflow run"
     required: true
 
-
 runs:
   using: "composite"
   steps:
-
-    - name: Scan Dockerfile
+    - name: Scan Dockerfile build context
       id: scan_dockerfile
       shell: bash
+      env:
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+        TRIVY_SERVER: ${{ inputs.trivy_server }}
       run: |
-        echo "Scanning Dockerfile..."
-        # Scan Dockerfile, export SARIF
-        trivy config --severity HIGH,CRITICAL --format sarif --output trivy-report.sarif --file-patterns "dockerfile:${{ inputs.dockerfile_path }}" ${{ inputs.dockerfile_path }}
-      continue-on-error: true 
+        SCAN_PATH="$(dirname "$DOCKERFILE_PATH")"
+        echo "🔍 Scanning Dockerfile build context: $SCAN_PATH"
+        echo "Dockerfile analyzer target: $DOCKERFILE_PATH"
+        echo "DOCKERFILE_SCAN_PATH=$SCAN_PATH" >> "$GITHUB_ENV"
 
-    - name: Logging detected vulnerabilities
-      id: logging_vulns
-      shell: bash
-      if: steps.scan_dockerfile.conclusion == 'success'
-      run: |
-        issues=$(jq -r '
-          .runs[].tool.driver.rules[]
-          | select(.properties.tags | index("HIGH") or index("CRITICAL"))
-          |"
-        RuleId: \(.id)
-        Severity: \((.properties.tags[] | select(. == "HIGH" or . == "CRITICAL")))
-        Score: \(.properties."security-severity")
-        Reference: \(.helpUri)
-        Message: \(.fullDescription.text)
-        -----"
-        ' trivy-report.sarif)
-
-        if [[ -z "$issues" ]]; then
-          echo "✅ No HIGH/CRITICAL vulnerabilities detected"
-          echo "detected_vulns=false" >> "$GITHUB_OUTPUT"
+        if [ -n "$TRIVY_SERVER" ] && curl -sS --fail "${TRIVY_SERVER%/}/healthz" > /dev/null; then
+          echo "✅ Trivy server is UP"
+          trivy fs \
+            --server "$TRIVY_SERVER" \
+            --scanners vuln,secret,misconfig \
+            --misconfig-scanners dockerfile \
+            --severity HIGH,CRITICAL \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-report.json \
+            --exit-code 0 \
+            "$SCAN_PATH"
         else
-          echo "🚨 Detected HIGH/CRITICAL vulnerabilities:"
-          echo "$issues"
-          echo "detected_vulns=true" >> "$GITHUB_OUTPUT"
+          echo "⚠️ Trivy server is unavailable. Falling back to local scan."
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --misconfig-scanners dockerfile \
+            --severity HIGH,CRITICAL \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-report.json \
+            --exit-code 0 \
+            "$SCAN_PATH"
         fi
       continue-on-error: true
+
+    - name: Parse build context findings
+      id: logging_vulns
+      if: always()
+      shell: bash
+      run: |
+        SECRET=0
+        VULN=0
+        MISCONF=0
+        TOTAL_FINDINGS=0
+        SCAN_OK=false
+
+        if [ -s trivy-report.json ] && jq empty trivy-report.json 2>/dev/null; then
+          SECRET=$(jq '[.Results[]?.Secrets[]?] | length' trivy-report.json 2>/dev/null || echo 0)
+          VULN=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-report.json 2>/dev/null || echo 0)
+          MISCONF=$(jq '[.Results[]?.Misconfigurations[]?] | length' trivy-report.json 2>/dev/null || echo 0)
+          TOTAL_FINDINGS=$((SECRET + VULN + MISCONF))
+          SCAN_OK=true
+        else
+          echo "::warning::Trivy did not produce a valid build context JSON report. Check the scan logs."
+        fi
+
+        if [ "$SCAN_OK" != "true" ]; then
+          STATUS="⚠️ Scan failed"
+          DETECTED=false
+        elif [ "$TOTAL_FINDINGS" -gt 0 ]; then
+          STATUS="❌ Issues found"
+          DETECTED=true
+          echo "🚨 Detected $TOTAL_FINDINGS HIGH/CRITICAL finding(s): $SECRET secret(s), $VULN vulnerability finding(s), $MISCONF misconfiguration(s)."
+        else
+          STATUS="✅ Clean"
+          DETECTED=false
+          echo "✅ No HIGH/CRITICAL findings detected in the Dockerfile build context."
+        fi
+
+        echo "SECRET=$SECRET" >> "$GITHUB_ENV"
+        echo "VULN=$VULN" >> "$GITHUB_ENV"
+        echo "MISCONF=$MISCONF" >> "$GITHUB_ENV"
+        echo "TOTAL_FINDINGS=$TOTAL_FINDINGS" >> "$GITHUB_ENV"
+        echo "SCAN_OK=$SCAN_OK" >> "$GITHUB_ENV"
+        echo "SCAN_STATUS=$STATUS" >> "$GITHUB_ENV"
+        echo "detected_vulns=$DETECTED" >> "$GITHUB_OUTPUT"
+        echo "finding_count=$TOTAL_FINDINGS" >> "$GITHUB_OUTPUT"
+        echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
+
+    - name: Write summary
+      if: always()
+      shell: bash
+      env:
+        REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
+        REPORT_AUTHOR: ${{ inputs.commit_author_name }}
+        REPORT_COMMIT: ${{ inputs.commit_id }}
+      run: |
+        SECRET="${SECRET:-0}"
+        VULN="${VULN:-0}"
+        MISCONF="${MISCONF:-0}"
+        TOTAL_FINDINGS="${TOTAL_FINDINGS:-0}"
+        SCAN_OK="${SCAN_OK:-false}"
+        SCAN_STATUS="${SCAN_STATUS:-⚠️ Scan failed}"
+        SCAN_PATH="${DOCKERFILE_SCAN_PATH:-$(dirname "$REPORT_DOCKERFILE")}"
+        COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${REPORT_COMMIT}"
+
+        {
+          echo "# 🐳 Trivy Dockerfile Build Context — $SCAN_STATUS"
+          echo ""
+          echo "## 1. Summary"
+          echo ""
+          echo "**Dockerfile:** \`$REPORT_DOCKERFILE\` · **Scan path:** \`$SCAN_PATH\` · **Commit:** [\`$REPORT_COMMIT\`]($COMMIT_URL) · **Author:** \`$REPORT_AUTHOR\`"
+          echo ""
+          echo "| Category | Count | Status |"
+          echo "|----------|:-----:|:------:|"
+          echo "| 🔑 Secrets (HIGH,CRITICAL) | $SECRET | $([ "$SCAN_OK" != "true" ] && echo "⚠️" || { [ "$SECRET" -eq 0 ] && echo "✅" || echo "❌"; }) |"
+          echo "| 🛡️ Filesystem vulnerabilities (HIGH,CRITICAL) | $VULN | $([ "$SCAN_OK" != "true" ] && echo "⚠️" || { [ "$VULN" -eq 0 ] && echo "✅" || echo "❌"; }) |"
+          echo "| ⚙️ Dockerfile misconfigurations (HIGH,CRITICAL) | $MISCONF | $([ "$SCAN_OK" != "true" ] && echo "⚠️" || { [ "$MISCONF" -eq 0 ] && echo "✅" || echo "❌"; }) |"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$VULN" -gt 0 ] && [ -f trivy-report.json ]; then
+          {
+            echo "### 🛡️ Filesystem vulnerabilities"
+            echo ""
+            echo "<details><summary>🔴 View all $VULN finding(s)</summary>"
+            echo ""
+            echo "| Severity | CVE | Package | Installed | Fixed in | Target |"
+            echo "|----------|-----|---------|-----------|----------|--------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          jq -r '
+            def clean: tostring | gsub("[\r\n|]"; " ");
+            .Results[]? |
+            .Target as $target |
+            .Vulnerabilities[]? |
+            (
+              if (.PrimaryURL // "") == ""
+              then (.VulnerabilityID // "Unknown")
+              else "[\(.VulnerabilityID // "Unknown")](\(.PrimaryURL))"
+              end
+            ) as $cve |
+            "| \(.Severity // "-" | clean) | \($cve) | \(.PkgName // "-" | clean) | \(.InstalledVersion // "-" | clean) | \(if (.FixedVersion // "") == "" then "-" else (.FixedVersion | clean) end) | \($target // "-" | clean) |"
+          ' trivy-report.json >> "$GITHUB_STEP_SUMMARY" || true
+
+          {
+            echo ""
+            echo "</details>"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$MISCONF" -gt 0 ] && [ -f trivy-report.json ]; then
+          {
+            echo "### ⚙️ Dockerfile misconfigurations"
+            echo ""
+            echo "<details><summary>🟠 View all $MISCONF finding(s)</summary>"
+            echo ""
+            echo "| Severity | ID | Title | File | Line | Resolution |"
+            echo "|----------|----|-------|------|:----:|------------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          jq -r '
+            def clean: tostring | gsub("[\r\n|]"; " ");
+            .Results[]? |
+            .Target as $target |
+            .Misconfigurations[]? |
+            (
+              if (.PrimaryURL // "") == ""
+              then (.ID // "Unknown")
+              else "[\(.ID // "Unknown")](\(.PrimaryURL))"
+              end
+            ) as $id |
+            "| \(.Severity // "-" | clean) | \($id) | \(.Title // "-" | clean) | \($target // "-" | clean) | \(.CauseMetadata.StartLine // "-") | \(.Resolution // "-" | clean) |"
+          ' trivy-report.json >> "$GITHUB_STEP_SUMMARY" || true
+
+          {
+            echo ""
+            echo "</details>"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$SECRET" -gt 0 ] && [ -f trivy-report.json ]; then
+          {
+            echo "### 🔑 Secrets"
+            echo ""
+            echo "<details><summary>🔑 View all $SECRET finding(s)</summary>"
+            echo ""
+            echo "| Rule ID | Severity | Title | File | Line |"
+            echo "|---------|----------|-------|------|:----:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          jq -r '
+            def clean: tostring | gsub("[\r\n|]"; " ");
+            .Results[]? |
+            .Target as $target |
+            .Secrets[]? |
+            "| \(.RuleID // "-" | clean) | \(.Severity // "-" | clean) | \(.Title // "-" | clean) | \($target // "-" | clean) | \(.StartLine // "-") |"
+          ' trivy-report.json >> "$GITHUB_STEP_SUMMARY" || true
+
+          {
+            echo ""
+            echo "</details>"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$SCAN_OK" != "true" ]; then
+          {
+            echo "## 2. Next action"
+            echo ""
+            echo "1. Fix the scan error shown in the logs, then rerun the scan before relying on this result."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$TOTAL_FINDINGS" -gt 0 ]; then
+          ACTION_NUMBER=1
+          {
+            echo "## 2. Next action"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SECRET" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix secrets ($SECRET):** Rotate or revoke exposed credentials, remove them from the build context, and use BuildKit/GitHub Secrets, Vault, or environment variables. Use the reported file and line above." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ "$VULN" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix vulnerabilities ($VULN):** Open the linked CVE(s) above and update dependencies to **Fixed in** when available." >> "$GITHUB_STEP_SUMMARY"
+            ACTION_NUMBER=$((ACTION_NUMBER + 1))
+          fi
+
+          if [ "$MISCONF" -gt 0 ]; then
+            echo "${ACTION_NUMBER}. **Fix misconfigurations ($MISCONF):** Open the linked rule ID(s) above and apply the reported **Resolution** to each Dockerfile line." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          {
+            echo ""
+            echo "Push the fixes and rerun the scan before merging or deploying."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     - name: Determine scan report URL
       if: steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
+      env:
+        REPORT_JOB_ID: ${{ inputs.job_id }}
       run: |
-        if [ "${{ github.event.repository.private }}" = "true" ]; then
-          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ inputs.job_id }}" >> $GITHUB_ENV
-        else
-          echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/security/code-scanning" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
-
-    - name: Upload SARIF to Security tab
-      if: steps.logging_vulns.outputs.detected_vulns == 'true' && github.event.repository.private == 'false'
-      uses: github/codeql-action/upload-sarif@v4
-      with:
-        sarif_file: trivy-report.sarif
-        category: trivy-dockerfile
+        echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${REPORT_JOB_ID}" >> "$GITHUB_ENV"
       continue-on-error: true
 
     - name: Clean noreply mail receivers
       if: steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
+      env:
+        RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
+        FALLBACK_MAIL_RECEIVER: ${{ inputs.mail_username }}
       run: |
-        RAW="${{ inputs.mail_receivers }}"
+        CLEAN=$(echo "$RAW_MAIL_RECEIVERS" | tr ',' '\n' | grep -v 'noreply.github.com' | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
 
-        # Remove noreply.github.com emails
-        CLEAN=$(echo "$RAW" | tr ',' '\n' | grep -v 'noreply.github.com' | tr '\n' ',' | sed 's/,$//')
-
-        # Fallback: if all receivers were removed
         if [ -z "$CLEAN" ]; then
-          CLEAN="${{ inputs.mail_username }}"
+          CLEAN="$FALLBACK_MAIL_RECEIVER"
         fi
 
-        echo "MAIL_RECEIVERS=$CLEAN" >> $GITHUB_ENV
+        echo "MAIL_RECEIVERS=$CLEAN" >> "$GITHUB_ENV"
       continue-on-error: true
 
-    - name: Send mail if vulnerabilities detected
+    - name: Build Dockerfile mail report
       if: steps.logging_vulns.outputs.detected_vulns == 'true'
-      uses: dawidd6/action-send-mail@v4
+      shell: bash
+      env:
+        REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
+        REPORT_AUTHOR: ${{ inputs.commit_author_name }}
+        REPORT_COMMIT: ${{ inputs.commit_id }}
+      run: |
+        {
+          echo "Trivy Dockerfile Build Context Scan — $SCAN_STATUS"
+          echo "==============================================="
+          echo "Repository : ${{ github.repository }}"
+          echo "Dockerfile : $REPORT_DOCKERFILE"
+          echo "Scan path  : ${DOCKERFILE_SCAN_PATH:-$(dirname "$REPORT_DOCKERFILE")}"
+          echo "Author     : $REPORT_AUTHOR"
+          echo "Commit     : ${{ github.server_url }}/${{ github.repository }}/commit/$REPORT_COMMIT"
+          echo "Report     : $scan_report_url"
+          echo ""
+          echo "Findings summary"
+          echo "----------------"
+          echo "Secrets                       : ${SECRET:-0}"
+          echo "Filesystem vulnerabilities    : ${VULN:-0}"
+          echo "Dockerfile misconfigurations  : ${MISCONF:-0}"
+          echo ""
+
+          if [ "${SECRET:-0}" -gt 0 ]; then
+            echo "Secrets"
+            echo "-------"
+            jq -r '
+              .Results[]? |
+              .Target as $target |
+              .Secrets[]? |
+              "File     : \($target // "-")\nLine     : \(.StartLine // "-")\nRule     : \(.RuleID // "Unknown")\nSeverity : \(.Severity // "Unknown")\nTitle    : \(.Title // "Unknown")\n"
+            ' trivy-report.json 2>/dev/null || echo "(unable to read secret findings)"
+          fi
+
+          if [ "${VULN:-0}" -gt 0 ]; then
+            echo "Filesystem vulnerabilities"
+            echo "--------------------------"
+            jq -r '
+              .Results[]? |
+              .Target as $target |
+              .Vulnerabilities[]? |
+              "Target    : \($target // "-")\nCVE       : \(.VulnerabilityID // "Unknown")\nSeverity  : \(.Severity // "Unknown")\nPackage   : \(.PkgName // "Unknown")\nInstalled : \(.InstalledVersion // "Unknown")\nFixed in  : \(if (.FixedVersion // "") == "" then "Not provided by Trivy" else .FixedVersion end)\nReference : \(.PrimaryURL // "-")\n"
+            ' trivy-report.json 2>/dev/null || echo "(unable to read vulnerability findings)"
+          fi
+
+          if [ "${MISCONF:-0}" -gt 0 ]; then
+            echo "Dockerfile misconfigurations"
+            echo "----------------------------"
+            jq -r '
+              .Results[]? |
+              .Target as $target |
+              .Misconfigurations[]? |
+              "File       : \($target // "-")\nLine       : \(.CauseMetadata.StartLine // "-")\nID         : \(.ID // "Unknown")\nSeverity   : \(.Severity // "Unknown")\nTitle      : \(.Title // "Unknown")\nResolution : \(.Resolution // "Review and fix this configuration")\nReference  : \(.PrimaryURL // "-")\n"
+            ' trivy-report.json 2>/dev/null || echo "(unable to read misconfiguration findings)"
+          fi
+
+          echo "Next actions"
+          echo "------------"
+          if [ "${SECRET:-0}" -gt 0 ]; then
+            echo "- Rotate or revoke exposed credentials and move them to BuildKit/GitHub Secrets, Vault, or runtime environment variables."
+          fi
+          if [ "${VULN:-0}" -gt 0 ]; then
+            echo "- Update affected dependencies in the reported lockfile or manifest."
+          fi
+          if [ "${MISCONF:-0}" -gt 0 ]; then
+            echo "- Apply the recommended Dockerfile remediation to each reported line."
+          fi
+          echo "- Push the remediation commit and rerun this workflow before merging or deploying."
+        } > trivy-dockerfile-mail-report.txt
+      continue-on-error: true
+
+    - name: Send mail if findings detected
+      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      uses: dawidd6/action-send-mail@v16
       with:
         server_address: smtp.gmail.com
         server_port: 465
         secure: true
         username: ${{ inputs.mail_username }}
         password: ${{ inputs.mail_password }}
-        subject: "[ALERT] Vulnerabilities Found in Dockerfile"
-        body: |
-          🚨 Dockerfile Vulnerability Alert
-
-          Dockerfile:
-            - Path: ${{ inputs.dockerfile_path }}
-
-          Severity:
-            - HIGH / CRITICAL vulnerabilities detected
-
-          Commit:
-            - Author: ${{ inputs.commit_author_name }}
-            - Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ inputs.commit_id }}
-
-          Report:
-            ${{ env.scan_report_url }}
-
-          Action required:
-            - Update base image (FROM ...)
-            - Upgrade vulnerable packages
-            - Re-run the pipeline after fixing
-
-          ---
-          SRE CI Security Scan
+        subject: "[Trivy] ${{ env.TOTAL_FINDINGS }} HIGH/CRITICAL finding(s) in ${{ inputs.dockerfile_path }} build context"
+        body: file://trivy-dockerfile-mail-report.txt
         to: ${{ env.MAIL_RECEIVERS }}
-        from: ${{ inputs.mail_username }}
+        from: Security Bot <${{ inputs.mail_username }}>
       continue-on-error: true
