@@ -85,7 +85,7 @@ jobs:
       needs.build.result == 'success' &&
       needs.build.outputs.check_no_ci != 'true' &&
       (github.event_name != 'workflow_dispatch' || inputs.run_test == true)
-    runs-on: ubuntu-dind
+    runs-on: robot-dind
     permissions:
       contents: read
       packages: write
