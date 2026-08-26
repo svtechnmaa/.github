@@ -16,3 +16,12 @@ else
   echo "Secret detected. Please review the output above and remove any secrets before committing."
   exit 1 # Comment this line if use detect mode
 fi
+
+# ==== BEGIN agentic-parity check (managed) ====
+_agentic_changed=$(git diff --cached --name-only | grep -E '^(\.claude/|\.codex/|\.agentic/|CLAUDE\.md|AGENTS\.md)' || true)
+if [[ -n "$_agentic_changed" ]]; then
+  if [[ -f ".agentic/tests/parity.sh" ]]; then
+    bash .agentic/tests/parity.sh || exit 1
+  fi
+fi
+# ==== END agentic-parity check (managed) ====

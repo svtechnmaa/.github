@@ -1,0 +1,39 @@
+name: Agentic Parity
+
+on:
+  pull_request:
+    paths:
+      - '.claude/**'
+      - '.codex/**'
+      - '.agentic/**'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+  push:
+    branches:
+      - main
+    paths:
+      - '.claude/**'
+      - '.codex/**'
+      - '.agentic/**'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+
+jobs:
+  parity:
+    name: Parity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run parity contract
+        run: bash .agentic/tests/parity.sh
+
+  check_job_results:
+    name: Check job results
+    if: always()
+    needs: [parity]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        uses: svtechnmaa/.github/actions/check_job_results@main
+        with:
+          jobs: ${{ toJSON(needs) }}
