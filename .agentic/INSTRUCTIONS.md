@@ -13,7 +13,7 @@ Every user of this repo needs these installed and configured before doing any or
 1. **A coding agent CLI** — one of:
    - [Claude Code](https://docs.claude.com/en/docs/claude-code) — requires Anthropic account.
    - [Codex CLI](https://developers.openai.com/codex/cli/) — requires OpenAI account.
-   Both are supported. Skills mirror each other (parity contract in `.agentic/tests/parity.sh`), so either agent produces the same behavior.
+   Both are supported. Skills mirror each other (parity contract in `.agentic/tests/parity.sh`) — structural parity only (file presence, frontmatter, phase back-references, and stub size ≤5KB) — see `.agentic/tests/parity.sh` for the exact invariants.
 2. **`gh` CLI** — [github.com/cli/cli](https://cli.github.com/) — authenticated as an Org Admin identity (`gh auth login`).
 3. **MCP servers** — configured for the chosen agent(s):
    - **GitHub MCP** (`https://api.githubcopilot.com/mcp/`) — OAuth or PAT bearer. Toolsets: `context, repos, issues, pull_requests, users, actions, orgs, code_security, secret_protection`.
@@ -29,6 +29,7 @@ Every user of this repo needs these installed and configured before doing any or
 | **Node.js 20+** (for any `npm i -g` fallback) | `brew install node` | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt install nodejs` | `winget install OpenJS.NodeJS.LTS` |
 | **git 2.34+** (signed commits, `core.hooksPath`) | Preinstalled or `brew install git` | `sudo apt install git` | `winget install Git.Git` |
 | **jq** (used by `.agentic/tests/parity.sh` + audit skill) | `brew install jq` | `sudo apt install jq` | `winget install jqlang.jq` OR WSL2 |
+| **yq** v4+ mikefarah (used by audit-repos Mode C for YAML job-key detection) | `brew install yq` | `sudo snap install yq` | `winget install MikeFarah.yq` |
 | **Signed commits** | GPG via `brew install gnupg` OR SSH signing (git 2.34+) | `sudo apt install gnupg` OR SSH signing | GPG via [Gpg4win](https://gpg4win.org/) OR SSH signing |
 
 ### One-time per-machine setup (all OSes)
@@ -216,12 +217,13 @@ done
 Every non-archived repo must have at least one active workflow file under `.github/workflows/` AND at least one successful run in the last 6 months. Repos with zero workflows or all-disabled workflows are flagged. See §5.6 for full `gh api` recipe.
 
 **Check C — `.githooks/` completeness**
-Every non-archived repo must contain:
+Check C verifies `.githooks/` file presence only. Every non-archived repo must contain:
 - `.githooks/pre-commit` (betterleaks hook)
 - `.githooks/install-betterleaks.sh`
 - `.githooks/setup_security_scan.bash`
 
 Missing any of these → flagged as non-compliant.
+- Members must run `git config core.hooksPath .githooks` locally; activation is not auto-audited.
 
 ---
 
@@ -271,10 +273,11 @@ For bulk operations (affecting ≥ 3 repos or ≥ 3 members), produce a dry-run 
 
 ```bash
 # Dry-run pattern — list affected items, do not mutate
-gh api /orgs/svtechnmaa/repos --paginate -q '.[].name' | head -20
+gh api /orgs/svtechnmaa/repos --paginate -q '.[].name' | tee /tmp/listing
+echo "Count: $(wc -l < /tmp/listing) repos"
 ```
 
-Show the list and ask: "Apply to all N repos listed above? (yes/no)"
+Show the full listing and count, then ask: "Apply to all N repos listed above? (yes/no)"
 
 ### §4.4 Batch rules
 
@@ -319,21 +322,28 @@ All playbooks cite **Tool: see §3 mapping** for the appropriate MCP vs `gh` CLI
    ```
 2. Invite to org (requires Owner or Org Admin permission):
    ```bash
+   INVITEE_ID=$(gh api users/<username> -q .id)
    gh api --method POST /orgs/svtechnmaa/invitations \
-     -f invitee_id="<user-node-id>" \
+     -f invitee_id="$INVITEE_ID" \
      -f role="direct_member"
    ```
-3. Add to appropriate team(s) (see §2.3 for team slugs):
+3. Confirm team and repo assignments before proceeding. Show:
+   - Team names to be added (e.g., `devops`, `ci`)
+   - Repos and permission level (push/pull/admin), if any direct collaborator access is needed
+
+   Ask: "Confirm add? [y/N]". Only proceed on `y`.
+
+4. Add to appropriate team(s) (see §2.3 for team slugs):
    ```bash
    gh api --method PUT /orgs/svtechnmaa/teams/<team-slug>/memberships/<username> \
      -f role="member"
    ```
-4. Grant repo access if the team assignment does not cover the needed repo:
+5. Grant repo access if the team assignment does not cover the needed repo:
    ```bash
    gh api --method PUT /repos/svtechnmaa/<repo>/collaborators/<username> \
      -f permission="push"
    ```
-5. Confirm with the user: "Invitation sent to `<username>`. They will appear in org membership after accepting. Add to additional teams?"
+6. Confirm with the user: "Invitation sent to `<username>`. They will appear in org membership after accepting. Add to additional teams?"
 
 **Guardrail:** Step 2 is Significant — confirm before executing.
 
@@ -343,11 +353,16 @@ All playbooks cite **Tool: see §3 mapping** for the appropriate MCP vs `gh` CLI
 
 **Steps:**
 
-1. List current team memberships and repo collaborations for the user:
+1. List current team memberships and direct repo collaborations for the user:
    ```bash
    gh api /orgs/svtechnmaa/members --paginate -q '.[] | select(.login=="<username>") | .login'
    gh api /orgs/svtechnmaa/teams --paginate -q '.[].slug' | while read team; do
-     gh api /orgs/svtechnmaa/teams/$team/members --paginate -q '.[] | select(.login=="<username>") | "\(env.team): \(.login)"'
+     gh api /orgs/svtechnmaa/teams/$team/members --paginate -q --arg team "$team" '.[] | select(.login=="<username>") | "\($team): \(.login)"'
+   done
+   # Also enumerate direct repo collaborators
+   for repo in $(gh api /orgs/svtechnmaa/repos --paginate -q '.[].name'); do
+     gh api "/repos/svtechnmaa/$repo/collaborators?affiliation=direct" --paginate \
+       -q '.[] | select(.login=="<username>") | "'"$repo"'"' 2>/dev/null
    done
    ```
 2. Show the full membership summary. Confirm: "Remove `<username>` from all listed teams and the org? (yes/no)"
@@ -376,9 +391,13 @@ All playbooks cite **Tool: see §3 mapping** for the appropriate MCP vs `gh` CLI
      -f name="<repo-name>" \
      -f description="<description>" \
      -f private=true \
-     -f auto_init=true \
-     -f default_branch="main"
+     -f auto_init=true
    ```
+   > **Note:** `default_branch` is NOT settable at `POST /orgs/{org}/repos` — the API silently ignores it. Required sequence: (1) create with `-f auto_init=true`, (2) then `PATCH /repos/{org}/{repo}` with `-f default_branch=main`, (3) the branch must exist before the PATCH succeeds. Example:
+   > ```bash
+   > gh api --method PATCH /repos/svtechnmaa/<repo-name> -f default_branch=main
+   > ```
+   > Run this after Step 2 and before Step 3.
 3. Assign to owning team:
    ```bash
    gh api --method PUT /orgs/svtechnmaa/teams/<team-slug>/repos/svtechnmaa/<repo-name> \

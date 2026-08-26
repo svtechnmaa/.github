@@ -6,7 +6,7 @@ This is the organisation-level `.github` repository for `svtechnmaa`. It serves 
 
 ## Repository layout
 
-```
+```text
 .github/                        # GitHub metadata (workflows, etc.)
   workflows/
     agentic-parity.yml          # CI: blocks PRs if agent-side parity check fails
@@ -66,7 +66,7 @@ See [`.agentic/INSTRUCTIONS.md §0`](.agentic/INSTRUCTIONS.md) for the per-OS se
 
 ## Contributing
 
-- Any edit under `.claude/**`, `.codex/**`, `.agentic/**`, `CLAUDE.md`, or `AGENTS.md` **must** be mirrored across both agent sides to preserve parity.
+- Only `.claude/**` and `.codex/**` skill directories must be kept in parity. `.agentic/**` is the shared source of truth (not mirrored per agent). `CLAUDE.md` and `AGENTS.md` are agent-specific stubs and may contain per-agent sections.
 - Run `bash .agentic/tests/parity.sh` locally before pushing — the `agentic-parity` CI check will block the PR if it fails.
 - Composite actions under `actions/` follow standard GitHub Actions authoring conventions; keep `action.yml` as the entry point for each action.
 - Workflows under `.github/workflows/` that enforce org-wide policy should be documented in `.agentic/INSTRUCTIONS.md`.

@@ -5,6 +5,8 @@ allowed-tools: [Bash, Read, AskUserQuestion, Agent]
 argument-hint: "[repo-name] or comma-separated list"
 ---
 
+# rollout-check-job-results
+
 ## When to Use
 
 Invoke when either of the following is true:

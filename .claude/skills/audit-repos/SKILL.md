@@ -5,6 +5,8 @@ allowed-tools: [Bash, Read]
 argument-hint: "compliance | workflow-active | check-job-results-ready [repo,repo,...]"
 ---
 
+# audit-repos
+
 ## When to Use
 
 Invoke when you need a read-only picture of org-wide policy adherence, workflow health,

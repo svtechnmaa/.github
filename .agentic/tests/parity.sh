@@ -75,8 +75,11 @@ while IFS= read -r -d '' skill_md; do
   first_line="$(head -1 "$skill_md")"
   if [[ "$first_line" != "---" ]]; then
     errors+=("DRIFT: $skill_md does not start with '---' (missing YAML frontmatter)")
-  elif ! grep -q '^name:' "$skill_md"; then
-    errors+=("DRIFT: $skill_md frontmatter is missing 'name:' field")
+  else
+    frontmatter="$(sed -n '/^---$/,/^---$/p' "$skill_md" | sed '1d;$d')"
+    if ! printf '%s\n' "$frontmatter" | grep -q '^name:'; then
+      errors+=("DRIFT: $skill_md frontmatter is missing 'name:' field")
+    fi
   fi
 
   # Check 3: phase-doc back-reference
@@ -92,6 +95,22 @@ while IFS= read -r -d '' skill_md; do
   fi
 done < <(find ".claude/skills" ".codex/skills" -name "SKILL.md" -print0 2>/dev/null)
 
+# --- Check 6: name: field parity between .claude and .codex skill sides ---
+while IFS= read -r -d '' claude_skill_md; do
+  skill_dir_name="$(basename "$(dirname "$claude_skill_md")")"
+  codex_skill_md=".codex/skills/$skill_dir_name/SKILL.md"
+  if [[ ! -f "$codex_skill_md" ]]; then
+    continue  # already caught by Check 2
+  fi
+  claude_fm="$(sed -n '/^---$/,/^---$/p' "$claude_skill_md" | sed '1d;$d')"
+  codex_fm="$(sed -n '/^---$/,/^---$/p' "$codex_skill_md" | sed '1d;$d')"
+  claude_name="$(printf '%s\n' "$claude_fm" | grep '^name:' | head -1 | sed 's/^name:[[:space:]]*//')"
+  codex_name="$(printf '%s\n' "$codex_fm" | grep '^name:' | head -1 | sed 's/^name:[[:space:]]*//')"
+  if [[ "$claude_name" != "$codex_name" ]]; then
+    errors+=("MISMATCH: .claude/skills/$skill_dir_name/SKILL.md name='$claude_name' vs .codex/skills/$skill_dir_name/SKILL.md name='$codex_name'")
+  fi
+done < <(find ".claude/skills" -name "SKILL.md" -print0 2>/dev/null)
+
 # --- Report ---
 if [[ "${#errors[@]}" -gt 0 ]]; then
   for err in "${errors[@]}"; do
@@ -100,5 +119,5 @@ if [[ "${#errors[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "parity: OK ($skill_count skills, checks: stubs, folders, refs, frontmatter, size)"
+echo "parity: OK ($skill_count skills, checks: stubs, folders, refs, frontmatter, size, name-parity)"
 exit 0

@@ -3,6 +3,9 @@
 Tool-agnostic read-only audit of `svtechnmaa` GitHub repositories.
 Output is always a Markdown findings table. Never auto-fix.
 
+> **Prerequisites:** `yq` (mikefarah v4+) is required for Mode C job-key detection.
+> Install: macOS `brew install yq` · Ubuntu `sudo snap install yq` · Windows `winget install MikeFarah.yq`
+
 ---
 
 ## When to invoke
@@ -34,10 +37,8 @@ Runs three checks (A, B, C) derived from `INSTRUCTIONS.md §2.8`.
 ```bash
 # List repos with zero team assignments
 gh api /orgs/svtechnmaa/repos --paginate -q '.[].name' | while read repo; do
-  count=$(gh api "/orgs/svtechnmaa/teams" --paginate \
-    -q "[.[] | select(.repositories_url != null)] | length" 2>/dev/null || echo 0)
-  # More reliable: check if any team has this repo
-  teams=$(gh api "/repos/svtechnmaa/${repo}/teams" -q '.[].name' 2>/dev/null)
+  teams=$(gh api "/repos/svtechnmaa/${repo}/teams" -q '.[].name' 2>/dev/null) \
+    || { echo "ERROR|${repo}|teams_api_failed"; continue; }
   if [ -z "$teams" ]; then
     echo "ORPHAN|${repo}|no team"
   fi
@@ -52,7 +53,7 @@ Emit table:
 
 ### Check B — Workflow requirement (DevOps / CI / SRE / OrgAdmin scope)
 
-For repos in scopes DevOps, CI, SRE, or OrgAdmin: verify `.github/workflows/` is non-empty.
+Applies to repos under teams: DevOps, CI, SRE, OrgAdmin. Archived repos are skipped. For each in-scope repo: verify `.github/workflows/` is non-empty.
 
 ```bash
 for repo in $(gh api /orgs/svtechnmaa/repos --paginate -q '.[].name'); do
@@ -113,20 +114,34 @@ A repo's workflow is considered **active** only if all three sub-checks pass:
 SIX_MONTHS_AGO=$(date -u -v-6m +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
   date -u --date="6 months ago" +%Y-%m-%dT%H:%M:%SZ)
 
+skip_repo() {
+  local repo="$1"
+  local pushed
+  pushed=$(gh api "/repos/svtechnmaa/${repo}" -q '.pushed_at' 2>/dev/null) || return 0
+  # Skip stale repos (no push in 6 months)
+  [[ "$pushed" < "$SIX_MONTHS_AGO" ]] && return 0
+  # Skip sync-bot-only repos
+  [[ "$repo" =~ (-sync|-mirror|-fork)$ ]] && return 0
+  return 1
+}
+
 for repo in $(gh api /orgs/svtechnmaa/repos --paginate -q '.[].name'); do
+  skip_repo "$repo" && continue
 
   # Sub-check 1: workflow files present
   wf_files=$(gh api "/repos/svtechnmaa/${repo}/contents/.github/workflows" \
-    --jq '[.[] | select(.name | test("\\.ya?ml$"))] | length' 2>/dev/null || echo 0)
+    --jq '[.[] | select(.name | test("\\.ya?ml$"))] | length' 2>/dev/null) \
+    || { echo "ERROR|${repo}|wf_files_api_failed"; continue; }
 
   # Sub-check 2: at least one workflow with state == "active"
   active_count=$(gh api "/repos/svtechnmaa/${repo}/actions/workflows" \
-    --jq '.workflows | map(select(.state == "active")) | length' 2>/dev/null || echo 0)
+    --jq '.workflows | map(select(.state == "active")) | length' 2>/dev/null) \
+    || { echo "ERROR|${repo}|active_count_api_failed"; continue; }
 
   # Sub-check 3: run in last 6 months
   recent_run=$(gh api "/repos/svtechnmaa/${repo}/actions/runs" \
     --jq ".workflow_runs | map(select(.created_at >= \"${SIX_MONTHS_AGO}\")) | length" \
-    2>/dev/null || echo 0)
+    2>/dev/null) || { echo "ERROR|${repo}|recent_run_api_failed"; continue; }
 
   if [ "$wf_files" -eq 0 ] || [ "$active_count" -eq 0 ] || [ "$recent_run" -eq 0 ]; then
     echo "INACTIVE|${repo}|files:${wf_files} active:${active_count} recent_runs:${recent_run}"
@@ -149,11 +164,7 @@ Do not flag a repo as failing `workflow-active` if it matches any of:
 - All workflows explicitly set to `disabled_manually` in the API response.
 - Repo has no commits in the last 6 months (`pushed_at < SIX_MONTHS_AGO`).
 
-```bash
-# Pre-filter: skip stale repos
-pushed=$(gh api "/repos/svtechnmaa/${repo}" -q '.pushed_at')
-if [[ "$pushed" < "$SIX_MONTHS_AGO" ]]; then continue; fi
-```
+The `skip_repo()` helper defined in the bash block above enforces the stale and sync-bot criteria automatically.
 
 ---
 
@@ -165,28 +176,35 @@ Lists repos that have at least one **active** workflow (pass `workflow-active` c
 SIX_MONTHS_AGO=$(date -u -v-6m +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
   date -u --date="6 months ago" +%Y-%m-%dT%H:%M:%SZ)
 
+# skip_repo() is defined in Mode B above — reuse the same function here.
+
 for repo in $(gh api /orgs/svtechnmaa/repos --paginate -q '.[].name'); do
+  skip_repo "$repo" && continue
 
   # Must have active workflow (same sub-checks as workflow-active)
   active_count=$(gh api "/repos/svtechnmaa/${repo}/actions/workflows" \
-    --jq '.workflows | map(select(.state == "active")) | length' 2>/dev/null || echo 0)
+    --jq '.workflows | map(select(.state == "active")) | length' 2>/dev/null) \
+    || { echo "ERROR|${repo}|active_count_api_failed"; continue; }
   [ "$active_count" -eq 0 ] && continue
 
   recent_run=$(gh api "/repos/svtechnmaa/${repo}/actions/runs" \
     --jq ".workflow_runs | map(select(.created_at >= \"${SIX_MONTHS_AGO}\")) | length" \
-    2>/dev/null || echo 0)
+    2>/dev/null) || { echo "ERROR|${repo}|recent_run_api_failed"; continue; }
   [ "$recent_run" -eq 0 ] && continue
 
-  # Fetch each workflow file and grep for check_job_results
+  # Check each workflow file for a check_job_results job key (yq v4 required)
   has_job=false
-  wf_names=$(gh api "/repos/svtechnmaa/${repo}/contents/.github/workflows" \
-    --jq '.[].download_url' 2>/dev/null)
-  for url in $wf_names; do
-    content=$(curl -fsSL "$url" 2>/dev/null)
-    if echo "$content" | grep -q 'check_job_results'; then
+  wf_files_list=$(gh api "/repos/svtechnmaa/${repo}/contents/.github/workflows" \
+    --jq '[.[] | select(.name | test("\\.ya?ml$")) | .download_url] | .[]' 2>/dev/null)
+  for url in $wf_files_list; do
+    tmp_wf=$(mktemp /tmp/wf_XXXXXX.yml)
+    curl -fsSL "$url" -o "$tmp_wf" 2>/dev/null
+    if yq '.jobs | keys[]' "$tmp_wf" 2>/dev/null | grep -Fxq 'check_job_results'; then
       has_job=true
+      rm -f "$tmp_wf"
       break
     fi
+    rm -f "$tmp_wf"
   done
 
   if [ "$has_job" = "false" ]; then
