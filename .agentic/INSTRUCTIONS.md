@@ -80,7 +80,17 @@ PAT scopes required: read/write on org admin, repos, actions, security. Fine-gra
 
 ### MCP server config — ClickUp
 
-Follow ClickUp's MCP setup docs. Both agents accept the same server URL; auth is via ClickUp personal token bound to the Org Admin's ClickUp identity. Required workspace: the one containing parent task `86d40y9gr`.
+Follow ClickUp's MCP setup docs. Both agents accept the same server URL; auth is via ClickUp personal token bound to the Org Admin's ClickUp identity. Required workspace: the one containing list `170724951` (CI/CD Pipeline).
+
+Key context IDs to configure or note:
+- List: `170724951`
+- Bucket — GitHub Organization: `86d2hff9e`
+- Bucket — Workflows: `86d45c45g`
+- Bucket — Security: `86d45c45z`
+- Bucket — Documentation: `86d45c46g`
+- Rollout parent (check_job_results): `86d40y9gr`
+
+All agentic ClickUp writes must follow the hierarchy contract in `§ ClickUp task hierarchy`.
 
 ### OS-specific gotchas
 
@@ -512,6 +522,42 @@ git config core.hooksPath .githooks      # verify hook path
 
 ---
 
+## § ClickUp task hierarchy
+
+Every agentic ClickUp write against list `170724951` (CI/CD Pipeline — https://app.clickup.com/25582633/v/li/170724951, space SRE) MUST be a descendant of one of the four level-1 buckets below. Never create tasks at the list root.
+
+| Bucket | Task ID | URL | Scope |
+|---|---|---|---|
+| GitHub Organization | `86d2hff9e` | https://app.clickup.com/t/86d2hff9e | Org configuration, team management, member management, repository settings, org-wide policies, SSO, PATs, secrets/variables |
+| Workflows | `86d45c45g` | https://app.clickup.com/t/86d45c45g | GitHub Actions workflows, CI/CD pipelines, composite actions, self-hosted runners, rollouts (e.g. `check_job_results`) |
+| Security | `86d45c45z` | https://app.clickup.com/t/86d45c45z | Vulnerability scanning (Trivy, SonarQube), secret scanning (betterleaks), CVE/IaC remediation, Dependabot |
+| Documentation | `86d45c46g` | https://app.clickup.com/t/86d45c46g | Runner architecture, ArgoCD flow, CI/CD architecture, workflow guides, scan-tool configuration, meeting notes, ADRs |
+
+Depth is unlimited beyond level 1.
+
+### Rollout convention
+
+- Rollout parent task lives under the **Workflows** bucket (`86d45c45g`). Example: `check_job_results` rollout parent `86d40y9gr`.
+- Per-repo subtask lives under the rollout parent.
+- Sub-subtasks under each repo subtask:
+  - `created PR: <url>` — status `review`, assignee Tú `37650575`
+  - `Review` — assignee Chi `270897282`
+
+### When unsure which bucket
+
+| If the work touches… | Use bucket |
+|---|---|
+| CI/repo code or a GitHub Actions workflow | **Workflows** (`86d45c45g`) |
+| A scanning tool or vulnerability | **Security** (`86d45c45z`) |
+| A document, ADR, or guide | **Documentation** (`86d45c46g`) |
+| An org-level setting, SSO, PAT, or team | **GitHub Organization** (`86d2hff9e`) |
+
+### Legacy note
+
+Existing top-level tasks in list `170724951` that are not descendants of one of the four buckets are legacy and out of scope for this contract. Migration to the correct bucket is a separate task.
+
+---
+
 ## §6 Response Format Templates
 
 ### Audit findings table
@@ -634,3 +680,4 @@ For escalation, stop the current operation, describe the situation clearly, and 
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-08-26 | Initial creation — migrated from CLAUDE.md draft; added §0 Prerequisites, hub-and-spoke structure | admin |
+| 2026-08-27 | Add § ClickUp task hierarchy contract; update §0 ClickUp MCP context IDs | admin |

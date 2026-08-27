@@ -51,3 +51,5 @@ Summary of steps:
   or `git commit --amend` at any point. If the push is rejected, investigate root cause.
 - **Skipped audit delegation** — never go directly to Step C. The audit (Step A) is mandatory
   to confirm the repo is eligible and to avoid duplicate work on repos that already have the job.
+
+> ClickUp writes follow the hierarchy contract in `.agentic/INSTRUCTIONS.md § ClickUp task hierarchy`.

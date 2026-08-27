@@ -10,3 +10,5 @@ Use `bash` and `gh` CLI for all git and GitHub operations.
 For ClickUp tracking (Step D), use ClickUp MCP tools if available; otherwise write a TODO
 entry to `rollout-log.txt` in the scratchpad directory and continue.
 Never force-push, skip the audit step, or open a PR without both reviewers assigned.
+
+> ClickUp writes follow the hierarchy contract in `.agentic/INSTRUCTIONS.md § ClickUp task hierarchy`.

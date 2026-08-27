@@ -152,9 +152,12 @@ ClickUp reference IDs:
 | Entity | ID |
 |--------|----|
 | Parent task | `86d40y9gr` |
+| Bucket (parent lives under) | `86d45c45g` (Workflows) |
 | List | `170724951` |
 | Assignee: Tú Hoàng | `37650575` |
 | Assignee: Chi Phạm | `270897282` |
+
+> The parent task `86d40y9gr` is a child of the **Workflows** bucket (`86d45c45g`). All new rollout tracking tasks must follow the hierarchy contract in `.agentic/INSTRUCTIONS.md § ClickUp task hierarchy`.
 
 Under the repo's subtask under parent `86d40y9gr`, create two sub-subtasks:
 
