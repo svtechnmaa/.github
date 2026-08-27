@@ -80,7 +80,7 @@ PAT scopes required: read/write on org admin, repos, actions, security. Fine-gra
 
 ### MCP server config — ClickUp
 
-Follow ClickUp's MCP setup docs. Both agents accept the same server URL; auth is via ClickUp personal token bound to the Org Admin's ClickUp identity. Required workspace: the one containing list `170724951` (CI/CD Pipeline).
+Follow ClickUp's MCP setup docs. Both agents accept the same server URL. Each member authenticates with **their own** ClickUp personal token — the token is bound to whichever ClickUp identity generated it, and every task write is attributed to that user. Do NOT share tokens. Required workspace: the one containing list `170724951` (CI/CD Pipeline).
 
 Key context IDs to configure or note:
 - List: `170724951`
@@ -251,7 +251,7 @@ All playbooks in §5 express commands as `gh` CLI / `gh api` + `jq`. This is the
 | Codex CLI | Codex native tools | `gh` CLI via shell | `~/.config/codex/config.toml` |
 | Any agent (fallback) | `gh api` + `jq` | `gh` CLI | n/a |
 
-**ClickUp operations** always use the ClickUp MCP if available, otherwise `curl` against the ClickUp REST API v2. Credentials: personal token bound to the Org Admin's ClickUp identity.
+**ClickUp operations** always use the ClickUp MCP if available, otherwise `curl` against the ClickUp REST API v2. Credentials: each member's own ClickUp personal token — bound to whichever ClickUp identity generated it. Do NOT share tokens.
 
 ---
 
