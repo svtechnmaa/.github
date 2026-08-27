@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 env:
-  COMMIT_FULL_ID: ${{ inputs.commit_id || github.sha }}
+  COMMIT_FULL_ID: ${{ inputs.commit_id || github.event.pull_request.head.sha || github.event.after || github.sha }}
   CONTAINER_MAPPING_PORT: '8505:8505'
   DOCKERFILE_PATH: './Dockerfile'
 
@@ -225,15 +225,31 @@ jobs:
           charts_ref: main
           stacked_charts_repository: ${{ github.repository_owner }}/stacked_charts
           stacked_charts_ref: master
-          utilities_repository: ${{ github.repository_owner }}/SVTECH_CI_utilities
+          utilities_repository: ${{ github.repository_owner }}/SVTECH_CICD_Utilities
           utilities_ref: dev-jenkins
-          chart_values_file: kubernetes/bngblaster/values.yaml
-          chart_image_repository: svtechnmaa/bngblaster_web_client
-          charts_repository_name: charts
-          stack_charts_string: bngblaster
+          # Configure these four values for the repositories used by your project.
+          # See workflow-templates/README.md in the central .github repository.
+          chart_values_file: kubernetes/bngblaster/values.yaml # path inside charts_repository to the values.yaml file
+          chart_image_repository: svtechnmaa/bngblaster_web_client # repository: value paired with tag: in that values file
+          charts_repository_name: charts # short repository name passed to the stacked-chart updater
+          stack_charts_string: bngblaster # chart/application identifier understood by the stacked-chart updater
           push_token: ${{ secrets.PUSH_TOKEN }}
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
           gpg_key_id: ${{ secrets.GPG_KEY_ID }}
           git_user_name: svtechnmaa
           git_user_email: nmaa@svtech.com.vn
+
+  check_job_results:
+    name: Check job results
+    if: always()
+    needs:
+      - build
+      - test
+      - release
+    runs-on: ubuntu-dind
+    steps:
+      - name: Check job results
+        uses: svtechnmaa/.github/actions/check_job_results@main
+        with:
+          jobs: ${{ toJSON(needs) }}

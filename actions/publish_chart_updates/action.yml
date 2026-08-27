@@ -98,7 +98,7 @@ runs:
         repository: ${{ inputs.utilities_repository }}
         ref: ${{ inputs.utilities_ref }}
         token: ${{ inputs.push_token }}
-        path: SVTECH_CI_utilities
+        path: SVTECH_CICD_Utilities
 
     - name: Import GPG signing key
       uses: crazy-max/ghaction-import-gpg@v6.2.0
@@ -145,7 +145,7 @@ runs:
       run: |
         set -euo pipefail
         python3 -m pip install requests pyyaml
-        python3 SVTECH_CI_utilities/auto_testing/python_script/public_helmchart_release.py \
+        python3 SVTECH_CICD_Utilities/auto_testing/python_script/public_helmchart_release.py \
           --BUILD_VARS_PATH='.' \
           --ID='.' \
           --GITHUB_TOKEN="${PUSH_TOKEN}" \
