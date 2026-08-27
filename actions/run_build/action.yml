@@ -161,7 +161,7 @@ runs:
       if: steps.check_commit_message.outputs.no_ci != 'true'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github_token || github.token }}
+        GH_TOKEN: ${{ inputs.github_token }}
         OWNER_TYPE: ${{ github.event.repository.owner.type }}
       run: |
         set -euo pipefail
@@ -216,7 +216,7 @@ runs:
         steps.check_commit_message.outputs.no_scan != 'true'
       shell: bash
       env:
-        ACTIONS_TOKEN: ${{ inputs.push_token || inputs.github_token || github.token }}
+        ACTIONS_TOKEN: ${{ inputs.push_token || inputs.github_token }}
       run: |
         set -euo pipefail
         job_id="$(curl --silent --show-error --fail \
@@ -253,7 +253,7 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
-        password: ${{ inputs.github_token || github.token }}
+        password: ${{ inputs.github_token }}
 
     - name: Build Docker image without cache
       if: >-

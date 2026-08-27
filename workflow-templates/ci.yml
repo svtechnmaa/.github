@@ -56,7 +56,7 @@ jobs:
           container_mapping_port: ${{ env.CONTAINER_MAPPING_PORT }}
           dockerfile_path: ${{ env.DOCKERFILE_PATH }}
           commit_id: ${{ env.COMMIT_FULL_ID }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GH_TOKEN }}
           push_token: ${{ secrets.PUSH_TOKEN }}
           docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
           docker_hub_access_token: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
@@ -107,7 +107,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GH_TOKEN }}
       - name: Pull commit image
         run: docker pull "${{ steps.resolve_image.outputs.image_ref }}"
       - name: Run application container
@@ -124,7 +124,7 @@ jobs:
         if: failure() && inputs.keep_image != true
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           COMMIT_TAG: ${{ steps.resolve_image.outputs.commit_short_id }}
         run: |
           set -euo pipefail
@@ -194,14 +194,14 @@ jobs:
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
       - name: Login to GitHub Container Registry
         if: steps.semantic.outputs.new_release_published == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GH_TOKEN }}
       - name: Promote release image
         if: steps.semantic.outputs.new_release_published == 'true'
         env:
@@ -226,7 +226,7 @@ jobs:
           stacked_charts_repository: ${{ github.repository_owner }}/stacked_charts
           stacked_charts_ref: master
           utilities_repository: ${{ github.repository_owner }}/SVTECH_CICD_Utilities
-          utilities_ref: dev-jenkins
+          utilities_ref: main
           # Configure these four values for the repositories used by your project.
           # See workflow-templates/README.md in the central .github repository.
           chart_values_file: kubernetes/bngblaster/values.yaml # path inside charts_repository to the values.yaml file
