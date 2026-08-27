@@ -14,7 +14,7 @@ Tool-agnostic step sequence — shell + `gh` CLI only.
 
 ## Preconditions
 
-- `gh auth status` shows an **Org Admin** identity.
+- `gh auth status` shows your GitHub identity with **write access to each target repo** (fork + PR if you don't have direct write).
 - Target repo(s) identified (either from ClickUp subtasks or user input).
 - `git`, `gh`, and `jq` available in PATH.
 

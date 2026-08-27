@@ -14,7 +14,7 @@ Every user of this repo needs these installed and configured before doing any or
    - [Claude Code](https://docs.claude.com/en/docs/claude-code) — requires Anthropic account.
    - [Codex CLI](https://developers.openai.com/codex/cli/) — requires OpenAI account.
    Both are supported. Skills mirror each other (parity contract in `.agentic/tests/parity.sh`) — structural parity only (file presence, frontmatter, phase back-references, and stub size ≤5KB) — see `.agentic/tests/parity.sh` for the exact invariants.
-2. **`gh` CLI** — [github.com/cli/cli](https://cli.github.com/) — authenticated as an Org Admin identity (`gh auth login`).
+2. **`gh` CLI** — [github.com/cli/cli](https://cli.github.com/) — authenticated with your GitHub identity via `gh auth login`. Any org member can drive read-only skills; skills that write require scopes matching the action.
 3. **MCP servers** — configured for the chosen agent(s):
    - **GitHub MCP** (`https://api.githubcopilot.com/mcp/`) — OAuth or PAT bearer. Toolsets: `context, repos, issues, pull_requests, users, actions, orgs, code_security, secret_protection`.
    - **ClickUp MCP** — for rollout tracking sub-subtasks under parent `86d40y9gr`.
@@ -76,7 +76,7 @@ url = "https://api.githubcopilot.com/mcp/"
 headers = { Authorization = "Bearer <FINE-GRAINED-PAT>" }
 ```
 
-PAT scopes required: read/write on org admin, repos, actions, security. Fine-grained PATs only — no Classic PATs (see §2.5).
+PAT scopes: for **read-only** audits, `read:org`, `repo` (read), `actions:read`, `security_events:read`. For **write** operations (PR creation, branch protection edits, etc.), add the corresponding write scopes. Fine-grained PATs only — no Classic PATs (see §2.5). Requests that exceed your token's scope will 403 at runtime — do not pre-elevate.
 
 ### MCP server config — ClickUp
 
@@ -102,7 +102,7 @@ All agentic ClickUp writes must follow the hierarchy contract in `§ ClickUp tas
 ### Verification checklist (run after setup)
 
 ```bash
-gh auth status                                  # must show Org Admin identity
+gh auth status                                  # must show your GitHub identity
 gh api /user -q .login                          # must return your username
 claude --version    2>/dev/null || true         # if using Claude Code
 codex --version     2>/dev/null || true         # if using Codex CLI
@@ -116,7 +116,7 @@ If any line fails, fix before doing any org-write operation.
 
 ## §1 Mission
 
-The assistant's role is to serve as a GitHub Organization Admin for `svtechnmaa`. The assistant:
+The assistant helps svtechnmaa org members carry out GitHub organization administration tasks — from simple audits to org-wide rollouts. It operates within the caller's own GitHub / ClickUp permissions; actions requiring elevated privileges will surface a 403 from the API and must be escalated to someone with those privileges (see §10 Escalation). The assistant:
 
 - Answers questions about org structure, policies, team membership, and repository configuration.
 - Performs read operations (list, audit, inspect) on demand.
@@ -150,7 +150,7 @@ Assume **Team** plan unless the user states otherwise.
 | Role | Scope | Can the assistant act as this role? |
 |---|---|---|
 | Owner | Full org admin | Yes, with user confirmation for destructive ops |
-| Member | Read + write on assigned repos | Yes, standard operations |
+| Member | Read + write in repos they have access to; org-level writes fail with 403 | Yes, up to what their token allows |
 | Outside Collaborator | Per-repo access only | Read only on their behalf |
 | Bot / App | Machine auth | Query only |
 
@@ -330,7 +330,7 @@ All playbooks cite **Tool: see §3 mapping** for the appropriate MCP vs `gh` CLI
    ```bash
    gh api /users/<username> -q '.login'
    ```
-2. Invite to org (requires Owner or Org Admin permission):
+2. Invite to org — this endpoint requires the caller to have Owner permission on the org. If your token lacks it, the API returns 403 and you must escalate to an org owner:
    ```bash
    INVITEE_ID=$(gh api users/<username> -q .id)
    gh api --method POST /orgs/svtechnmaa/invitations \
