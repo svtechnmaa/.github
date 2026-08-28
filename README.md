@@ -1,4 +1,8 @@
 # .github
 
 A magic repo for workflow template.
-This template will show up in github market place.
+These templates appear in the **Actions → New workflow** picker for repositories
+in the organization.
+
+For chart/CD configuration instructions, see
+[`workflow-templates/README.md`](workflow-templates/README.md).

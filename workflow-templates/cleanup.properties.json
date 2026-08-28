@@ -1,0 +1,6 @@
+{
+  "name": "GHCR Image Cleanup",
+  "description": "Deletes expired test images from GitHub Container Registry while preserving release and latest images.",
+  "iconName": "octicon trash",
+  "categories": ["Deployment", "Docker"]
+}

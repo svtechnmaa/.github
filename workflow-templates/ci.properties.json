@@ -1,0 +1,6 @@
+{
+  "name": "Actions CI Workflow",
+  "description": "Builds a Docker image, runs repository tests, and optionally promotes semantic releases.",
+  "iconName": "octicon package",
+  "categories": ["Docker", "Continuous integration", "Deployment"]
+}
