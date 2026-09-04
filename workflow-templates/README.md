@@ -44,3 +44,32 @@ Chart CD runs only after a semantic release and requires:
 The chart update action fails early if the values file or image repository entry
 cannot be found, so verify the path and repository string before enabling a
 release.
+
+## Optional Docker Compose testing
+
+The CI template normally starts the built application image with the reusable
+container action. For repositories that need multiple services, manually run
+the workflow with `run_compose` enabled and set `compose_file` if the file is
+not `docker-compose.yml`. Compose replaces the single-container launcher to
+avoid port conflicts. The workflow validates the file, waits for services to
+start, and removes Compose containers and networks afterward without removing
+volumes. It assigns a run-specific Compose project name; avoid fixed
+`container_name` values in Compose files if multiple repositories share a
+self-hosted runner.
+
+If the Compose file should test the exact image built by CI, reference the
+provided `COMPOSE_IMAGE` environment variable in its service definition, for
+example: `image: ${COMPOSE_IMAGE}`.
+
+## GHCR cleanup settings
+
+The `cleanup.yml` starter workflow is safe by default: scheduled runs and manual
+runs start in preview-only mode. It only deletes package versions when a manual
+run explicitly sets `dry_run` to `false` and types `DELETE` into
+`confirm_delete`.
+Each run also has a configurable deletion cap (`max_deletions`, default `20`,
+maximum `100`). Release-like semantic-version tags (`vX.Y.Z`, including
+prerelease/build suffixes) and the `latest` tag are always excluded; only
+expired tags beginning with `test-v` are eligible.
+Runs are serialized per repository so overlapping cleanup runs cannot race each
+other.

@@ -2,31 +2,64 @@ name: GHCR Image Cleanup
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview matching images without deleting anything.
+        required: false
+        default: true
+        type: boolean
+      confirm_delete:
+        description: Type DELETE to authorize package-version deletion.
+        required: false
+        default: ''
+        type: string
+      max_deletions:
+        description: Maximum number of package versions this run may delete.
+        required: false
+        default: 20
+        type: number
   schedule:
     - cron: '0 0 * * 1'
 
 permissions:
   packages: write
 
+concurrency:
+  group: ghcr-cleanup-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
   CLEANUP_RETENTION_DAYS: '7'
   TEST_TAG_PREFIX: 'test-v'
   PACKAGE_NAME: ${{ github.event.repository.name }}
+  DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+  DELETE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_delete }}
+  MAX_DELETIONS: ${{ inputs.max_deletions || 20 }}
 
 jobs:
   cleanup:
-    name: Delete expired test images
+    name: Preview or delete expired test images
     runs-on: ubuntu-dind
     steps:
-      - name: Delete old test images
+      - name: Find and optionally delete old test images
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          if ! [[ "${CLEANUP_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
-            echo "Cleanup retention days must be a non-negative integer." >&2
+          if ! [[ "${CLEANUP_RETENTION_DAYS}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Cleanup retention days must be a positive integer." >&2
+            exit 1
+          fi
+          if ! [[ "${MAX_DELETIONS}" =~ ^[1-9][0-9]*$ ]] || (( MAX_DELETIONS > 100 )); then
+            echo "Maximum deletions must be an integer from 1 through 100." >&2
+            exit 1
+          fi
+
+          package_name="${PACKAGE_NAME,,}"
+          if ! [[ "${package_name}" =~ ^[a-z0-9._-]+$ ]]; then
+            echo "Invalid GHCR package name: ${PACKAGE_NAME}" >&2
             exit 1
           fi
 
@@ -35,37 +68,95 @@ jobs:
             owner_endpoint="orgs"
           fi
 
-          versions_url="${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions?per_page=100"
-          response_file="$(mktemp)"
-          trap 'rm -f "${response_file}"' EXIT
+          work_dir="$(mktemp -d)"
+          response_file="${work_dir}/response.json"
+          candidates_file="${work_dir}/candidates.jsonl"
+          trap 'rm -rf "${work_dir}"' EXIT
+          : > "${candidates_file}"
 
-          curl --silent --show-error --fail \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "${versions_url}" > "${response_file}"
+          page=1
+          while true; do
+            versions_url="${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions?per_page=100&page=${page}"
+            curl --silent --show-error --fail \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${versions_url}" > "${response_file}"
 
-          jq -c \
-            --arg prefix "${TEST_TAG_PREFIX}" \
-            --argjson retention_days "${CLEANUP_RETENTION_DAYS}" \
-            '.[]
-             | (.metadata.container.tags // []) as $tags
-             | select(($tags | index("latest")) == null)
-             | select(($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | not)
-             | select($tags | any(startswith($prefix)))
-             | select((.updated_at | fromdateiso8601) < (now - ($retention_days * 24 * 60 * 60)))
-             | {id, tags: $tags, updated_at}' \
-            "${response_file}" |
+            jq -e 'type == "array"' "${response_file}" >/dev/null
+            page_count="$(jq 'length' "${response_file}")"
+            (( page_count == 0 )) && break
+
+            jq -c \
+              --arg prefix "${TEST_TAG_PREFIX}" \
+              --argjson retention_days "${CLEANUP_RETENTION_DAYS}" \
+              '.[]
+               | (.metadata.container.tags // []) as $tags
+               | select(($tags | index("latest")) == null)
+               | select(($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))) | not)
+               | select($tags | any(startswith($prefix)))
+               | select((.updated_at | fromdateiso8601) < (now - ($retention_days * 24 * 60 * 60)))
+               | {id, tags: $tags, updated_at}' \
+              "${response_file}" >> "${candidates_file}"
+
+            page=$((page + 1))
+          done
+
+          candidate_count="$(wc -l < "${candidates_file}" | tr -d ' ')"
+          {
+            echo "## GHCR cleanup"
+            echo ""
+            echo "- Package: \`${package_name}\`"
+            echo "- Retention: ${CLEANUP_RETENTION_DAYS} day(s)"
+            echo "- Matching versions: ${candidate_count}"
+            echo "- Maximum deletions: ${MAX_DELETIONS}"
+            echo ""
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if (( candidate_count == 0 )); then
+            echo "No expired test images found."
+            echo "- Result: nothing to delete" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          echo "Matching package versions:"
           while IFS= read -r image; do
+            jq -r '"- id=\(.id), tags=\(.tags | join(", ")), updated=\(.updated_at)"' <<< "${image}"
+          done < "${candidates_file}"
+
+          if [[ "${DRY_RUN}" != "false" || "${DELETE_CONFIRMATION}" != "DELETE" ]]; then
+            echo "Dry-run mode: no package versions were deleted."
+            {
+              echo "- Result: preview only; no deletions performed"
+              echo ""
+              echo "Set \`dry_run=false\` and type \`DELETE\` in \`confirm_delete\` during a manual run to enable deletion."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          deleted_count=0
+          while IFS= read -r image; do
+            if (( deleted_count >= MAX_DELETIONS )); then
+              echo "Deletion limit reached (${MAX_DELETIONS}); remaining versions were not deleted."
+              break
+            fi
+
             version_id="$(jq -r '.id' <<< "${image}")"
             tags="$(jq -r '.tags | join(", ")' <<< "${image}")"
-            updated_at="$(jq -r '.updated_at' <<< "${image}")"
-
-            echo "Deleting package version ${version_id} (tags: ${tags}, updated: ${updated_at})"
+            echo "Deleting package version ${version_id} (tags: ${tags})"
             curl --silent --show-error --fail --request DELETE \
               --header "Authorization: Bearer ${GH_TOKEN}" \
               --header "Accept: application/vnd.github+json" \
               --header "X-GitHub-Api-Version: 2022-11-28" \
-              "${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${PACKAGE_NAME}/versions/${version_id}"
+              "${GITHUB_API_URL}/${owner_endpoint}/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}/versions/${version_id}"
+            deleted_count=$((deleted_count + 1))
             sleep 1
-          done
+          done < "${candidates_file}"
+
+          echo "Deleted ${deleted_count} package version(s)."
+          {
+            echo "- Result: ${deleted_count} deletion(s) completed"
+            if (( deleted_count < candidate_count )); then
+              echo "- Remaining matches: $((candidate_count - deleted_count))"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
