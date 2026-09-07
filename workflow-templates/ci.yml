@@ -16,6 +16,16 @@ on:
         required: false
         default: true
         type: boolean
+      run_compose:
+        description: Start services with Docker Compose instead of one application container.
+        required: false
+        default: false
+        type: boolean
+      compose_file:
+        description: Compose file to use when run_compose is enabled.
+        required: false
+        default: docker-compose.yml
+        type: string
       keep_image:
         description: Keep the commit image in GHCR when tests fail.
         required: false
@@ -111,17 +121,49 @@ jobs:
       - name: Pull commit image
         run: docker pull "${{ steps.resolve_image.outputs.image_ref }}"
       - name: Run application container
+        if: inputs.run_compose != true
         uses: svtechnmaa/.github/actions/run_docker_container@main
         with:
           imageName: ${{ steps.resolve_image.outputs.image_ref }}
           containerName: ${{ needs.build.outputs.container_name }}
           containerMappingPort: ${{ env.CONTAINER_MAPPING_PORT }}
+      - name: Start Docker Compose services
+        id: compose_up
+        if: inputs.run_compose == true
+        shell: bash
+        env:
+          COMPOSE_FILE_PATH: ${{ inputs.compose_file }}
+          COMPOSE_IMAGE: ${{ steps.resolve_image.outputs.image_ref }}
+          COMPOSE_PROJECT_NAME: ci-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${COMPOSE_FILE_PATH}" || ! -f "${COMPOSE_FILE_PATH}" ]]; then
+            echo "Docker Compose file not found: ${COMPOSE_FILE_PATH}" >&2
+            exit 1
+          fi
+          docker compose --file "${COMPOSE_FILE_PATH}" config --quiet
+          docker compose --file "${COMPOSE_FILE_PATH}" up --detach --wait
       - name: Run repository tests
         run: |
           echo "##[command]robot tests/"
           robot tests/
+      - name: Stop Docker Compose services
+        id: compose_down
+        if: always() && inputs.run_compose == true
+        shell: bash
+        env:
+          COMPOSE_FILE_PATH: ${{ inputs.compose_file }}
+          COMPOSE_PROJECT_NAME: ci-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -f "${COMPOSE_FILE_PATH}" ]]; then
+            docker compose --file "${COMPOSE_FILE_PATH}" down --remove-orphans
+          fi
       - name: Delete commit image after test failure
-        if: failure() && inputs.keep_image != true
+        if: >-
+          failure() &&
+          steps.compose_down.outcome != 'failure' &&
+          inputs.keep_image != true
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
