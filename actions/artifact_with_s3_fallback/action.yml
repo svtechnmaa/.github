@@ -86,11 +86,16 @@ runs:
       id: upload
       if: ${{ always() && steps.validate.outcome == 'success' && inputs.operation == 'upload' }}
       continue-on-error: true
-      # Temporary failure injection to exercise the existing S3 fallback.
-      shell: bash
-      run: |
-        echo '::error::Forced GitHub artifact upload failure for S3 fallback testing.'
-        exit 1
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        overwrite: ${{ inputs.overwrite }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        archive: ${{ inputs.archive }}
 
     - name: Download from GitHub
       id: download
