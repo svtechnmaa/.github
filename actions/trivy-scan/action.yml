@@ -511,7 +511,8 @@ runs:
 
     # ── 10. Upload scan artifacts ───────────────────────────────────────────
     - name: Upload scan artifacts
-      if: always()
+      # X-Portal keeps findings in the job summary/logs without storing artifacts.
+      if: always() && github.repository != 'svtechnmaa/x-portal'
       uses: actions/upload-artifact@v7
       with:
         name: trivy-report-${{ github.sha }}
