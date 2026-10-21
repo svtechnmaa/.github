@@ -77,9 +77,8 @@ Raw upload example:
     s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
 ```
 
-The existing charts `main.yml` explicitly sets `if-no-files-found: error`,
-`retention-days: 60` and `overwrite: true` on its uploads to retain its earlier
-behavior. Robot report uploads keep caller-level `continue-on-error: true`.
+Charts `main.yml` uses the action defaults for upload options. Robot report
+uploads keep caller-level `continue-on-error: true`.
 
 ## Runner and repository setup
 
@@ -94,12 +93,16 @@ transfers still run in Bash with curl.
 Create organization secrets `S3_ARTIFACT_ACCESS_KEY` and
 `S3_ARTIFACT_SECRET_KEY`, granting caller repositories access. Fork PRs normally
 do not receive these secrets. Transfers use Signature V4 and path-style bucket
-addressing and retry transient errors using curl's retry policy, including
-connection-refused errors. `s3-retry-count` applies to every S3 PUT and GET,
+addressing and retry transport failures (including DNS, connection resets and
+partial transfers) as well as transient HTTP statuses using curl's retry policy.
+Permanent HTTP statuses are handled separately from transport failures, so they
+do not trigger `--retry-all-errors`. `s3-retry-count` applies to every S3 PUT and GET,
 including lookups in earlier attempts and legacy paths. Its default of `3` means
 one initial request plus up to three retries (four attempts total); `0` disables
 retries. Retry delay is 2 seconds, and each attempt is limited to 10 minutes.
 HTTP 403, 404 and 412 are not retried; 404 proceeds to the next lookup candidate.
+Transport failures after retries never fall back to an older attempt, even when
+the interrupted response had HTTP status 404.
 Upload uses a single S3 PUT, subject to the endpoint's request-size
 limit. Access to the GitHub actions and the S3 endpoint is required.
 
@@ -134,10 +137,14 @@ and remain readable in S3 browsers.
 
 The stable `content` key prevents collisions between raw files and archives,
 including artifacts whose names already end in `.tar.gz`. Object metadata records
-format (`tar`, `tar+gzip` or `raw`), requested retention, GitHub run/attempt URL,
+format (`tar`, `tar+gzip` or `raw`), payload SHA-256, requested retention, GitHub run/attempt URL,
 workflow display name, producing job and commit SHA. Workflow/job values are
 URL-encoded. S3 archives use tar rather than GitHub ZIP; download restores their
 contents automatically, while raw downloads preserve the file bytes.
+Compressed uploads pipe tar directly into gzip to avoid storing an intermediate
+uncompressed tar file. Downloads verify SHA-256 before restoring files when the
+metadata is present; older objects without checksum metadata remain readable.
+Only the final HTTP response's metadata is used after retries/proxy negotiation.
 
 Download checks the current attempt, then previous attempts in the same workflow
 run. Within each attempt it also checks the old `<artifact-name>.tar.gz` key.
