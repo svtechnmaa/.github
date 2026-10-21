@@ -73,6 +73,31 @@ response_header() {
   ' "$headers"
 }
 
+# Return 4 only when no object exists. A unique upload ID prevents accepting an
+# older/concurrent upload, even if it happens to have identical content.
+verify_upload() {
+  local status
+  if ! status=$(curl "${curl_options[@]}" --head --output /dev/null \
+    --dump-header "$headers" --write-out '%{http_code}' "$url"); then
+    echo '::error::Unable to verify S3 upload after an uncertain PUT result.'
+    return 1
+  fi
+  case "$status" in
+    200)
+      if [[ $(response_header x-amz-meta-artifact-upload-id) == "$upload_id" &&
+            $(response_header x-amz-meta-artifact-sha256) == "$payload_hash" &&
+            $(response_header content-length) == "$payload_size" ]]; then
+        echo 'S3 confirms this upload was stored successfully.'
+        return 0
+      fi
+      echo '::error::Existing S3 object does not match this upload ID, checksum and size.'
+      return 1
+      ;;
+    404) return 4 ;;
+    *) echo "::error::S3 upload verification failed (HTTP $status)."; return 1 ;;
+  esac
+}
+
 # Return 4 only for a missing object; never hide authentication or network errors.
 download_archive() {
   local candidate_key="$1" candidate_url_key="$2" legacy_format="${3:-}" status expected_digest actual_digest
@@ -138,25 +163,50 @@ case "$ARTIFACT_OPERATION" in
     # curl signs this explicit payload hash along with the PUT request.
     payload_hash=$(sha256sum -- "$archive")
     payload_hash=${payload_hash%% *}
-    if ! status=$(curl "${curl_options[@]}" "${conditional_headers[@]}" \
-      --header "x-amz-content-sha256: $payload_hash" \
-      --header 'Content-Type: application/octet-stream' \
-      --header "x-amz-meta-artifact-format: $format" \
-      --header "x-amz-meta-artifact-sha256: $payload_hash" \
-      --header "x-amz-meta-artifact-retention-days-requested: $ARTIFACT_RETENTION" \
-      --header "x-amz-meta-github-run-url: ${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt" \
-      --header "x-amz-meta-github-workflow: $(urlencode "${GITHUB_WORKFLOW:-$workflow_file}")" \
-      --header "x-amz-meta-github-job: $(urlencode "${GITHUB_JOB:-unknown}")" \
-      --header "x-amz-meta-github-sha: ${GITHUB_SHA:-unknown}" \
-      --upload-file "$archive" --output /dev/null --write-out '%{http_code}' "$url"); then
-      echo "::error::S3 upload transport failed (HTTP $status)."
-      exit 1
-    fi
-    case "$status" in
-      200|201) ;;
-      412) echo '::error::S3 artifact already exists in this attempt; use overwrite=true to replace it.'; exit 1 ;;
-      *) echo "::error::S3 upload failed (HTTP $status)."; exit 1 ;;
-    esac
+    payload_size=$(stat -c %s -- "$archive")
+    upload_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    retries=${ARTIFACT_S3_RETRY_COUNT:-3}
+    for ((try = 0; try <= retries; try++)); do
+      transport_failed=false
+      # Retry PUT here rather than inside curl: a lost response may mean the
+      # write succeeded, so reconcile with HEAD before sending another PUT.
+      if ! status=$(curl "${curl_options[@]}" --retry 0 "${conditional_headers[@]}" \
+        --header "x-amz-content-sha256: $payload_hash" \
+        --header 'Content-Type: application/octet-stream' \
+        --header "x-amz-meta-artifact-format: $format" \
+        --header "x-amz-meta-artifact-sha256: $payload_hash" \
+        --header "x-amz-meta-artifact-upload-id: $upload_id" \
+        --header "x-amz-meta-artifact-retention-days-requested: $ARTIFACT_RETENTION" \
+        --header "x-amz-meta-github-run-url: ${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$attempt" \
+        --header "x-amz-meta-github-workflow: $(urlencode "${GITHUB_WORKFLOW:-$workflow_file}")" \
+        --header "x-amz-meta-github-job: $(urlencode "${GITHUB_JOB:-unknown}")" \
+        --header "x-amz-meta-github-sha: ${GITHUB_SHA:-unknown}" \
+        --upload-file "$archive" --output /dev/null --write-out '%{http_code}' "$url"); then
+        transport_failed=true
+      fi
+      if [[ "$transport_failed" == false ]]; then
+        case "$status" in
+          200|201) break ;;
+          408|429|500|502|503|504|522|524|412) ;;
+          *) echo "::error::S3 upload failed (HTTP $status)."; exit 1 ;;
+        esac
+      fi
+      if verify_upload; then
+        break
+      else
+        result=$?
+        [[ "$result" == 4 ]] || exit 1
+      fi
+      if [[ "$status" == 412 ]]; then
+        echo '::error::S3 artifact already exists in this attempt; use overwrite=true to replace it.'
+        exit 1
+      fi
+      if ((try == retries)); then
+        echo "::error::S3 upload failed after $((try + 1)) attempt(s) (HTTP $status; transport failure: $transport_failed)."
+        exit 1
+      fi
+      sleep 2
+    done
     ;;
   download)
     found=false

@@ -8,10 +8,14 @@ module.exports = async ({glob, core}) => {
     followSymbolicLinks: true,
     implicitDescendants: true,
     omitBrokenSymbolicLinks: true,
-    excludeHiddenFiles: env.ARTIFACT_HIDDEN !== 'true',
   });
   const files = [];
   for (const file of await matcher.glob()) {
+    // github-script@v8 supplies glob 0.4.0, which ignores excludeHiddenFiles.
+    // Check every segment, including parents of explicitly matched files.
+    const segments = path.relative(process.cwd(), file).split(path.sep);
+    if (env.ARTIFACT_HIDDEN !== 'true' && segments.some(segment =>
+      segment.startsWith('.') && segment !== '..' && segment !== '.')) continue;
     if ((await fs.stat(file)).isFile()) files.push(file);
   }
   if (files.length === 0) {

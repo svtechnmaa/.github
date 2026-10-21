@@ -87,6 +87,11 @@ Bash, curl 7.75.0+ with `--aws-sigv4`, GNU tar, gzip, awk, sha256sum and coreuti
 Only failed GitHub uploads invoke `actions/github-script@v8` to resolve files with
 its built-in `@actions/glob`. This handles wildcard patterns, exclusions, tilde
 expansion, hidden-file filtering and the least common ancestor of search paths.
+Because github-script bundles `@actions/glob` 0.4.0, `prepare.cjs` filters hidden
+path segments itself. Unless `include-hidden-files: true`, dotfiles and files
+inside dot-directories are excluded, including explicitly requested hidden paths.
+Paths are checked relative to the working directory, so its own name is not
+treated as an upload path segment.
 There is no Python, AWS CLI, npm or pip installation in the workflow. S3 file
 transfers still run in Bash with curl.
 
@@ -94,17 +99,31 @@ Create organization secrets `S3_ARTIFACT_ACCESS_KEY` and
 `S3_ARTIFACT_SECRET_KEY`, granting caller repositories access. Fork PRs normally
 do not receive these secrets. Transfers use Signature V4 and path-style bucket
 addressing and retry transport failures (including DNS, connection resets and
-partial transfers) as well as transient HTTP statuses using curl's retry policy.
+partial transfers) as well as transient HTTP statuses.
 Permanent HTTP statuses are handled separately from transport failures, so they
-do not trigger `--retry-all-errors`. `s3-retry-count` applies to every S3 PUT and GET,
+do not trigger `--retry-all-errors`. `s3-retry-count` applies to every S3 PUT, GET
+and verification HEAD,
 including lookups in earlier attempts and legacy paths. Its default of `3` means
 one initial request plus up to three retries (four attempts total); `0` disables
 retries. Retry delay is 2 seconds, and each attempt is limited to 10 minutes.
-HTTP 403, 404 and 412 are not retried; 404 proceeds to the next lookup candidate.
+HTTP 403, 404 and 412 are not retried; download 404 proceeds to the next lookup candidate.
 Transport failures after retries never fall back to an older attempt, even when
 the interrupted response had HTTP status 404.
 Upload uses a single S3 PUT, subject to the endpoint's request-size
 limit. Access to the GitHub actions and the S3 endpoint is required.
+
+PUT retries run at script level with curl's internal PUT retries disabled. After
+a transport error, transient HTTP response or HTTP 412, a HEAD request checks
+the object's upload ID, SHA-256 metadata and Content-Length against this upload.
+A match confirms success even if the PUT response was lost. Each invocation
+generates a fresh random upload ID; an existing object from another invocation
+still fails verification even if its bytes match. Only a HEAD 404 allows a new
+PUT retry after an uncertain result. A verification error or mismatched object
+fails the upload without another PUT. With `s3-retry-count: 0`, verification still
+runs but no second PUT is sent. PUT retries cover HTTP 408, 429, 500, 502, 503,
+504, 522 and 524. The S3 credentials need `s3:GetObject` for HEAD and permission
+to distinguish a missing object (on AWS S3, `s3:ListBucket`); otherwise verification
+can fail with HTTP 403.
 
 Call the shared action directly, without checking out its repository. For a
 private action repository, enable caller access under **Settings → Actions →
@@ -168,3 +187,19 @@ required for guaranteed copies in both backends. If rerun producers change uploa
 backend, the backends can contain different versions of an artifact.
 
 Real SeaweedFS verification needs a workflow run with the organization secrets.
+
+## Local regression checks
+
+```sh
+node --test actions/artifact_with_s3_fallback/tests/prepare.test.cjs
+python actions/artifact_with_s3_fallback/tests/test_transfer.py
+bash -n actions/artifact_with_s3_fallback/transfer.sh
+```
+
+The file-selection tests model glob 0.4.0 returning hidden files. The transfer
+tests use real Bash/curl against a local HTTPS server, including a fully received
+PUT whose response connection is dropped, delayed visibility followed by 412,
+checksum/size/upload-ID mismatches, existing objects, permission failures and
+retry limits. They require Python 3, OpenSSL, Bash and the runner tools listed
+above. On Windows, Git Bash is selected by default; `TEST_BASH` can override it.
+These checks do not require S3 secrets and do not verify a real SeaweedFS server.
