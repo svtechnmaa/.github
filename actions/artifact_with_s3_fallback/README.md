@@ -1,116 +1,163 @@
 # GitHub artifacts with SeaweedFS fallback
 
-This shared Linux composite action provides artifact upload/download with S3 fallback.
-It lives in `actions/artifact_with_s3_fallback/` in the `svtechnmaa/.github` repository.
-Fallback runs in the producing/consuming job so that it has access to local files.
+Shared Linux composite action in `svtechnmaa/.github/actions/artifact_with_s3_fallback`.
+It tries `actions/upload-artifact@v7` or `actions/download-artifact@v8` first,
+with `continue-on-error: true`, then uses Bash/curl to transfer through S3 on
+failure. A failed fallback fails the caller step, unless that step also sets
+`continue-on-error: true`. Earlier deployment/test failures remain failures.
 
-- Upload: try `actions/upload-artifact@v4`, with `continue-on-error: true`.
-  Only on failure, upload a tar.gz archive to SeaweedFS.
-- Download: try `actions/download-artifact@v4`, with `continue-on-error: true`.
-  Only on failure, download and extract the tar.gz from SeaweedFS.
-- A successful fallback makes the artifact step succeed. If fallback fails, the
-  step fails. Earlier deployment/test failures are still failures.
-- An absent/empty upload source is an error, rather than a successful empty upload.
-- Uploads invoked with `if: always()` still attempt transfer after earlier failures.
+## Inputs
 
-## Secrets and runner setup
+Upload inputs follow [upload-artifact@v7](https://github.com/actions/upload-artifact/tree/v7).
 
-Create organization secrets `S3_ARTIFACT_ACCESS_KEY` and
-`S3_ARTIFACT_SECRET_KEY`, and grant this repository access to them. The workflow
-passes them explicitly because composite actions cannot read secrets directly.
-Secrets must be available for fallback (fork PRs normally do not receive them).
+| Input | Default | GitHub | SeaweedFS fallback |
+| --- | --- | --- | --- |
+| `operation` | `upload` | `upload` or `download` | Same |
+| `name` | `artifact` | Artifact name | Same; with `archive: false`, upload uses the file basename |
+| `path` | Required | File, directory, wildcard, multiline paths and `!exclude`; download destination | Same matching/root layout using `@actions/glob` |
+| `if-no-files-found` | `warn` | `warn`, `error`, `ignore` | Same; warn/ignore skip S3 upload successfully if no matches |
+| `retention-days` | `0` | Repository default at 0; otherwise requested retention | Bucket/server TTL remains 60 days; requested value is metadata, not expiration enforcement |
+| `compression-level` | `6` | ZIP level 0–9 | tar without compression at 0; gzip level 1–9 otherwise; ignored for raw uploads |
+| `overwrite` | `false` | Replace an existing artifact if true | Replace the same S3 artifact in the current attempt; false sends `If-None-Match: *` and an existing object fails with HTTP 412 |
+| `include-hidden-files` | `false` | Include dotfiles and hidden directories if true | Same matching policy |
+| `archive` | `true` | ZIP if true; exactly one file uploaded unchanged if false, named after its basename | tar/tar.gz if true; exactly one file uploaded unchanged if false, named after its basename |
+| `s3-access-key` | Empty | Unused | Access key; required on transfer |
+| `s3-secret-key` | Empty | Unused | Secret key; required on transfer |
+| `s3-endpoint` | `https://s3.svtechdev.org` | Unused | HTTPS endpoint |
+| `s3-bucket` | `github-artifacts` | Unused | Artifact bucket |
+| `s3-region` | `us-east-1` | Unused | Signature V4 region |
+| `s3-retry-count` | `3` | Unused | Retries per S3 request after the initial attempt; nonnegative integer; `0` disables retries |
 
-Runners need Bash, curl 7.75.0+ (with `--aws-sigv4`), GNU tar, find, awk,
-sha256sum and standard coreutils. No Python, AWS CLI or package installation is
-needed. Fallback calls `https://s3.svtechdev.org` directly with curl. S3 requests
-use Signature V4, path-style bucket addressing, region `us-east-1`, and the
-`github-artifacts` bucket by default. Transfers retry transient errors up to three
-times; each attempt has a 10-minute timeout. Upload uses a single S3 PUT, so keep
-compressed artifacts within the endpoint's single-request size limit.
+Upload-specific options describe upload behavior; S3 options apply to both upload
+and download. Download restores a
+single named artifact and auto-detects its S3 format from object metadata. For a
+raw upload, download by its **file basename**, because the upload `name` was
+ignored. Download does not support fetching all artifacts, patterns of artifact
+names, artifact IDs, or another repository/run. GitHub-specific upload outputs
+are not exposed by this wrapper.
 
-Call the action directly; no checkout of the action repository is needed.
-For a private action repository, enable access for caller repositories under
-**Settings → Actions → General → Access**. Publish this action to `main` in
-`svtechnmaa/.github` before running workflows that reference it.
+`overwrite` applies independently in each backend: a duplicate GitHub upload can
+fail and trigger S3 fallback. S3 prevents replacement only within the same attempt;
+earlier attempts remain separate. SeaweedFS must support conditional S3 PUTs for
+the no-overwrite guarantee. This is not a global cross-backend artifact registry.
+
+## Usage
 
 ```yaml
 - uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
   if: always()
+  continue-on-error: true # Optional for informational Robot reports
   with:
     operation: upload
-    name: vm_vars
-    path: ${{ github.workspace }}/build_vars.yml
+    name: robot-nmaa-result-#${{ github.run_number }}
+    path: |
+      ${{ github.workspace }}/test_result/**
+      !${{ github.workspace }}/test_result/**/*.tmp
+    s3-retry-count: 3 # Optional; retries after the initial request
     s3-access-key: ${{ secrets.S3_ARTIFACT_ACCESS_KEY }}
     s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
 
 - uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
   with:
     operation: download
-    name: vm_vars
-    path: ${{ github.workspace }}
+    name: robot-nmaa-result-#${{ github.run_number }}
+    path: ${{ github.workspace }}/restored-results
     s3-access-key: ${{ secrets.S3_ARTIFACT_ACCESS_KEY }}
     s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
 ```
 
-## Storage and retention
+Raw upload example:
 
-S3 keys group artifacts by organization/owner, repository, workflow, run and attempt:
+```yaml
+- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
+  with:
+    path: dist/release.tar.gz
+    archive: false # Effective artifact name: release.tar.gz
+    s3-access-key: ${{ secrets.S3_ARTIFACT_ACCESS_KEY }}
+    s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
+```
+
+The existing charts `main.yml` explicitly sets `if-no-files-found: error`,
+`retention-days: 60` and `overwrite: true` on its uploads to retain its earlier
+behavior. Robot report uploads keep caller-level `continue-on-error: true`.
+
+## Runner and repository setup
+
+Use Actions Runner **2.327.1+** for the Node 24 actions. Linux runners also need
+Bash, curl 7.75.0+ with `--aws-sigv4`, GNU tar, gzip, awk, sha256sum and coreutils.
+Only failed GitHub uploads invoke `actions/github-script@v8` to resolve files with
+its built-in `@actions/glob`. This handles wildcard patterns, exclusions, tilde
+expansion, hidden-file filtering and the least common ancestor of search paths.
+There is no Python, AWS CLI, npm or pip installation in the workflow. S3 file
+transfers still run in Bash with curl.
+
+Create organization secrets `S3_ARTIFACT_ACCESS_KEY` and
+`S3_ARTIFACT_SECRET_KEY`, granting caller repositories access. Fork PRs normally
+do not receive these secrets. Transfers use Signature V4 and path-style bucket
+addressing and retry transient errors using curl's retry policy, including
+connection-refused errors. `s3-retry-count` applies to every S3 PUT and GET,
+including lookups in earlier attempts and legacy paths. Its default of `3` means
+one initial request plus up to three retries (four attempts total); `0` disables
+retries. Retry delay is 2 seconds, and each attempt is limited to 10 minutes.
+HTTP 403, 404 and 412 are not retried; 404 proceeds to the next lookup candidate.
+Upload uses a single S3 PUT, subject to the endpoint's request-size
+limit. Access to the GitHub actions and the S3 endpoint is required.
+
+Call the shared action directly, without checking out its repository. For a
+private action repository, enable caller access under **Settings → Actions →
+General → Access**. Publish changes to `svtechnmaa/.github@main` before running
+updated caller workflows.
+
+## S3 layout and reruns
 
 ```text
 github-artifacts/
-└── svtechnmaa/
-    └── charts/
-        └── workflows/
-            └── main.yml/
-                └── runs/
-                    └── 123-987654321/
-                        └── attempts/
-                        │   ├── 1/artifacts/
-                        │   │   ├── vm_vars.tar.gz
-                        │   │   └── robot-nmaa-result-#123.tar.gz
-                        │   └── 2/artifacts/
-                        │       └── nmaa_build_vars.tar.gz
+└── svtechnmaa/charts/
+    └── workflows/main.yml/
+        └── runs/123-987654321/
+            └── attempts/
+                ├── 1/artifacts/
+                │   ├── vm_vars/content
+                │   └── robot-nmaa-result-#123/content
+                └── 2/artifacts/
+                    └── release.tar.gz/content
 ```
 
 Key format:
-`<owner>/<repo>/workflows/<workflow-file>/runs/<run-number>-<run-id>/attempts/<attempt>/artifacts/<artifact-name>.tar.gz`.
+`<owner>/<repo>/workflows/<workflow-file>/runs/<run-number>-<run-id>/attempts/<attempt>/artifacts/<artifact-name>/content`.
 
-- Owner and repository come from the caller's `GITHUB_REPOSITORY`, so artifacts
-  stay under `svtechnmaa/charts`, rather than the shared action repository.
-- Workflow filename comes from `GITHUB_WORKFLOW_REF` (for example `main.yml`).
-  Different workflow files can have the same display name without colliding.
-- The run folder combines the human-facing run number with the unique run ID.
-- Each attempt has its own artifacts, so reruns do not overwrite earlier S3 copies.
-  Artifact names are scoped to a run/attempt, just as GitHub artifacts are scoped
-  to a run. The producing job is object metadata rather than another path level,
-  allowing other jobs to download an artifact by name.
-- Names are URL-encoded for HTTP requests; object keys retain readable names such
-  as `robot-nmaa-result-#123.tar.gz` in an S3 browser.
-- Upload metadata includes the GitHub run/attempt URL, workflow display name,
-  producer job and commit SHA. Workflow/job metadata values are URL-encoded.
+Owner/repository refer to the caller, not the shared action repository. The
+workflow filename comes from `GITHUB_WORKFLOW_REF`, so duplicate display names
+do not collide. Run folders combine the visible run number and unique run ID.
+Each attempt remains separate. Artifact names are URL-encoded in HTTP requests
+and remain readable in S3 browsers.
 
-Download tries the current attempt first, then earlier attempts in descending
-order within the **same run and workflow**. This supports rerunning a failed
-consumer without rerunning successful producers. Only HTTP 404 advances to the
-next candidate; permission errors, connection failures and server errors fail the
-step after curl's retries. A corrupt downloaded archive also fails the step.
-As a final migration fallback, it checks the old
-`<owner>/<repo>/<run-id>/<artifact-name>.tar.gz` key. New uploads only use the new
-layout; existing S3 objects are not moved or deleted.
+The stable `content` key prevents collisions between raw files and archives,
+including artifacts whose names already end in `.tar.gz`. Object metadata records
+format (`tar`, `tar+gzip` or `raw`), requested retention, GitHub run/attempt URL,
+workflow display name, producing job and commit SHA. Workflow/job values are
+URL-encoded. S3 archives use tar rather than GitHub ZIP; download restores their
+contents automatically, while raw downloads preserve the file bytes.
 
-A file is restored by basename (`build_vars.yml`); a directory
-is restored by its contents, without adding a `test_result/` wrapper. Directory
-uploads exclude hidden files/directories, matching GitHub's default. This action
-accepts one literal file/directory path, without globs or multiline patterns.
+Download checks the current attempt, then previous attempts in the same workflow
+run. Within each attempt it also checks the old `<artifact-name>.tar.gz` key.
+As a final migration fallback it checks the original
+`<owner>/<repo>/<run-id>/<artifact-name>.tar.gz` key. Only HTTP 404 advances to the
+next candidate; access/network/server errors or corrupt archives fail the step.
+Existing objects are not moved or deleted. This supports rerunning failed
+consumers without rerunning successful producers.
 
-GitHub retention is 60 days. SeaweedFS expiration must be configured on the server
-or bucket; the action assumes the stated 60-day TTL already exists. It does not
-change lifecycle policy on every upload. See [SeaweedFS lifecycle documentation](https://github.com/seaweedfs/seaweedfs/wiki/S3-Lifecycle).
+## Retention and fallback limits
 
-This is fallback storage, so a successful GitHub upload does **not** create an S3
-copy. If a subsequent GitHub download fails, S3 can only recover an artifact that
-was previously uploaded there. For guaranteed availability from both backends,
-uploads must also mirror to S3. When rerunning producers, the two backends may
-contain different versions if their selected upload backend changes.
+`retention-days` is forwarded to GitHub. It does not change S3 expiration or bucket
+policy. SeaweedFS still uses the configured **60-day TTL**; an explicit different
+retention value produces a fallback warning. An S3 `Expires` header would only
+control HTTP caching, not automatic object deletion. See [SeaweedFS lifecycle
+documentation](https://github.com/seaweedfs/seaweedfs/wiki/S3-Lifecycle).
 
-An actual SeaweedFS transfer needs a workflow run with the organization secrets.
+A successful GitHub upload does **not** create an S3 copy. A later failed GitHub
+download can recover only data already uploaded to S3. Mirroring every upload is
+required for guaranteed copies in both backends. If rerun producers change upload
+backend, the backends can contain different versions of an artifact.
+
+Real SeaweedFS verification needs a workflow run with the organization secrets.
