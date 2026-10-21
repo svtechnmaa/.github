@@ -520,6 +520,7 @@ runs:
           trivy-image-*.json
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore
+      continue-on-error: true
 
     # ── 11. Fail pipeline ───────────────────────────────────────────────────
     - name: Evaluate result
