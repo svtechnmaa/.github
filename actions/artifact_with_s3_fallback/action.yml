@@ -1,0 +1,77 @@
+name: Artifact with SeaweedFS fallback
+description: Try GitHub artifacts first, then transfer a named artifact through S3 on failure.
+inputs:
+  operation:
+    description: upload or download
+    required: true
+  name:
+    description: Artifact name (one file or directory, no glob patterns)
+    required: true
+  path:
+    description: File/directory to upload, or destination directory for download
+    required: true
+  s3-access-key:
+    description: SeaweedFS access key; only used during fallback
+    required: false
+  s3-secret-key:
+    description: SeaweedFS secret key; only used during fallback
+    required: false
+  s3-endpoint:
+    description: S3 compatible endpoint
+    default: https://s3.svtechdev.org
+  s3-bucket:
+    description: Artifact bucket
+    default: github-artifacts
+  s3-region:
+    description: Signing region
+    default: us-east-1
+runs:
+  using: composite
+  steps:
+    - name: Validate operation
+      if: ${{ always() }}
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        case "$OPERATION" in
+          upload|download) ;;
+          *) echo "::error::operation must be upload or download"; exit 1 ;;
+        esac
+
+    - name: Upload to GitHub
+      id: upload
+      if: ${{ always() && inputs.operation == 'upload' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: error
+        retention-days: 60
+        overwrite: true
+
+    - name: Download from GitHub
+      id: download
+      if: ${{ always() && inputs.operation == 'download' }}
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+
+    - name: Transfer through SeaweedFS after GitHub failure
+      if: ${{ always() && (steps.upload.outcome == 'failure' || steps.download.outcome == 'failure') }}
+      shell: bash
+      env:
+        ARTIFACT_OPERATION: ${{ inputs.operation }}
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_PATH: ${{ inputs.path }}
+        ARTIFACT_S3_ENDPOINT: ${{ inputs.s3-endpoint }}
+        ARTIFACT_S3_BUCKET: ${{ inputs.s3-bucket }}
+        AWS_DEFAULT_REGION: ${{ inputs.s3-region }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.s3-access-key }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.s3-secret-key }}
+        ARTIFACT_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        bash "$ARTIFACT_ACTION_PATH/transfer.sh"
