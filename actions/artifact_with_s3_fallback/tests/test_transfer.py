@@ -43,6 +43,11 @@ class UploadTests(unittest.TestCase):
 
     def run_upload(self, scenario, retries=1, overwrite=False):
         state = {'puts': 0, 'heads': 0, 'object': None, 'errors': []}
+        if scenario.startswith('old-'):
+            # An artifact from a previous invocation exists before any PUT.
+            state['object'] = {'x-amz-meta-artifact-upload-id': 'previous-upload',
+                               'x-amz-meta-artifact-sha256': '0' * 64,
+                               'content-length': '3'}
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -70,6 +75,13 @@ class UploadTests(unittest.TestCase):
                     state['errors'].append('Missing SigV4 authorization')
                 if scenario == 'forbidden':
                     self.reply(403)
+                    return
+                if scenario.startswith('old-') and (state['puts'] == 1 or scenario == 'old-exhausted'):
+                    if scenario == 'old-lost-response':
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        self.connection.close()
+                    else:
+                        self.reply(503)
                     return
                 if scenario in ('existing-different', 'existing-identical'):
                     metadata['x-amz-meta-artifact-upload-id'] = 'previous-upload'
@@ -172,6 +184,23 @@ class UploadTests(unittest.TestCase):
 
     def test_transient_http_retry(self):
         self.check('transient', True, 2, 1)
+
+    def test_overwrite_retries_with_old_object(self):
+        for scenario in ('old-transient', 'old-lost-response'):
+            with self.subTest(scenario=scenario):
+                self.check(scenario, True, 2, 1, overwrite=True, retries=3)
+
+    def test_overwrite_old_object_retry_limit(self):
+        self.check('old-exhausted', False, 4, 4, overwrite=True, retries=3)
+        self.check('old-transient', False, 1, 1, overwrite=True, retries=0)
+
+    def test_old_object_without_overwrite_fails(self):
+        self.check('old-transient', False, 1, 1, retries=3)
+
+    def test_overwrite_current_upload_corruption_fails(self):
+        for scenario in ('wrong-checksum', 'wrong-size'):
+            with self.subTest(scenario=scenario):
+                self.check(scenario, False, 1, 1, overwrite=True, retries=3)
 
     def test_no_retry_still_verifies_committed_write(self):
         self.check('lost-after-store', True, 1, 1, retries=0)

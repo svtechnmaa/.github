@@ -117,9 +117,12 @@ a transport error, transient HTTP response or HTTP 412, a HEAD request checks
 the object's upload ID, SHA-256 metadata and Content-Length against this upload.
 A match confirms success even if the PUT response was lost. Each invocation
 generates a fresh random upload ID; an existing object from another invocation
-still fails verification even if its bytes match. Only a HEAD 404 allows a new
-PUT retry after an uncertain result. A verification error or mismatched object
-fails the upload without another PUT. With `s3-retry-count: 0`, verification still
+is never accepted as proof of success even if its bytes match. A HEAD 404 allows
+a new PUT retry after an uncertain result. With `overwrite: true`, a different
+or missing upload ID also allows a retry because the previous object may still
+be present. With `overwrite: false`, that object fails verification. A matching
+upload ID with incorrect checksum or size, or a HEAD request error, fails without
+another PUT. All PUT retries remain bounded by `s3-retry-count`. With `s3-retry-count: 0`, verification still
 runs but no second PUT is sent. PUT retries cover HTTP 408, 429, 500, 502, 503,
 504, 522 and 524. The S3 credentials need `s3:GetObject` for HEAD and permission
 to distinguish a missing object (on AWS S3, `s3:ListBucket`); otherwise verification

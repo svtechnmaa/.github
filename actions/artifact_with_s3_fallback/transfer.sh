@@ -73,10 +73,10 @@ response_header() {
   ' "$headers"
 }
 
-# Return 4 only when no object exists. A unique upload ID prevents accepting an
-# older/concurrent upload, even if it happens to have identical content.
+# Return 4 for a missing object, 5 for an older object that may be overwritten.
+# A unique upload ID prevents accepting another invocation's object as success.
 verify_upload() {
-  local status
+  local status stored_upload_id
   if ! status=$(curl "${curl_options[@]}" --head --output /dev/null \
     --dump-header "$headers" --write-out '%{http_code}' "$url"); then
     echo '::error::Unable to verify S3 upload after an uncertain PUT result.'
@@ -84,7 +84,12 @@ verify_upload() {
   fi
   case "$status" in
     200)
-      if [[ $(response_header x-amz-meta-artifact-upload-id) == "$upload_id" &&
+      stored_upload_id=$(response_header x-amz-meta-artifact-upload-id)
+      if [[ "$ARTIFACT_OVERWRITE" == true && "$stored_upload_id" != "$upload_id" ]]; then
+        echo 'S3 still contains another upload; retrying overwrite within the retry limit.'
+        return 5
+      fi
+      if [[ "$stored_upload_id" == "$upload_id" &&
             $(response_header x-amz-meta-artifact-sha256) == "$payload_hash" &&
             $(response_header content-length) == "$payload_size" ]]; then
         echo 'S3 confirms this upload was stored successfully.'
@@ -195,7 +200,7 @@ case "$ARTIFACT_OPERATION" in
         break
       else
         result=$?
-        [[ "$result" == 4 ]] || exit 1
+        [[ "$result" == 4 || "$result" == 5 ]] || exit 1
       fi
       if [[ "$status" == 412 ]]; then
         echo '::error::S3 artifact already exists in this attempt; use overwrite=true to replace it.'
