@@ -201,20 +201,4 @@ on `overwrite: false` with a deployed SeaweedFS version, use a unique scratch ke
 to perform two signed PUTs with `If-None-Match: *`. The second must return HTTP
 412, and a subsequent GET must still return the first payload. Record the tested
 SeaweedFS version alongside the deployment configuration. This conditional-PUT
-check requires endpoint credentials and is not covered by the local mock tests.
-
-## Local regression checks
-
-```sh
-node --test actions/artifact_with_s3_fallback/tests/prepare.test.cjs
-python actions/artifact_with_s3_fallback/tests/test_transfer.py
-bash -n actions/artifact_with_s3_fallback/transfer.sh
-```
-
-The file-selection tests model glob 0.4.0 returning hidden files. The transfer
-tests use real Bash/curl against a local HTTPS server, including a fully received
-PUT whose response connection is dropped, delayed visibility followed by 412,
-checksum/size/upload-ID mismatches, existing objects, permission failures and
-retry limits. They require Python 3, OpenSSL, Bash and the runner tools listed
-above. On Windows, Git Bash is selected by default; `TEST_BASH` can override it.
-These checks do not require S3 secrets and do not verify a real SeaweedFS server.
+check requires endpoint credentials and remains pending against the deployed server.
