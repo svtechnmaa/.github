@@ -15,7 +15,7 @@ Upload inputs follow [upload-artifact@v7](https://github.com/actions/upload-arti
 | `operation` | `upload` | `upload` or `download` | Same |
 | `name` | `artifact` | Artifact name | Same; with `archive: false`, upload uses the file basename |
 | `path` | Required | File, directory, wildcard, multiline paths and `!exclude`; download destination | Same matching/root layout using `@actions/glob` |
-| `if-no-files-found` | `warn` | `warn`, `error`, `ignore` | Same; warn/ignore skip S3 upload successfully if no matches |
+| `if-no-files-found` | `warn` | `warn`, `error`, `ignore` | If GitHub upload has failed, zero matches always fail the fallback |
 | `retention-days` | `0` | Repository default at 0; otherwise requested retention | Bucket/server TTL remains 60 days; requested value is metadata, not expiration enforcement |
 | `compression-level` | `6` | ZIP level 0–9 | tar without compression at 0; gzip level 1–9 otherwise; ignored for raw uploads |
 | `overwrite` | `false` | Replace an existing artifact if true | Replace the same S3 artifact in the current attempt; false sends `If-None-Match: *` and an existing object fails with HTTP 412 |
@@ -83,15 +83,21 @@ uploads keep caller-level `continue-on-error: true`.
 ## Runner and repository setup
 
 Use Actions Runner **2.327.1+** for the Node 24 actions. Linux runners also need
-Bash, curl 7.75.0+ with `--aws-sigv4`, GNU tar, gzip, awk, sha256sum and coreutils.
+Bash, curl 7.87.0+ with `--aws-sigv4`, GNU tar, gzip, awk, sha256sum and coreutils.
+The fallback checks the curl version before transferring. Older versions cannot
+sign this action's `--upload-file` PUTs using the supplied payload SHA-256.
 Only failed GitHub uploads invoke `actions/github-script@v8` to resolve files with
 its built-in `@actions/glob`. This handles wildcard patterns, exclusions, tilde
 expansion, hidden-file filtering and the least common ancestor of search paths.
 Because github-script bundles `@actions/glob` 0.4.0, `prepare.cjs` filters hidden
-path segments itself. Unless `include-hidden-files: true`, dotfiles and files
-inside dot-directories are excluded, including explicitly requested hidden paths.
-Paths are checked relative to the working directory, so its own name is not
-treated as an upload path segment.
+path segments itself. Unless `include-hidden-files: true`, a hidden search root
+and hidden entries below a search root are excluded. Ancestors above the search
+root are not checked, matching GitHub's traversal: `.output/public/**` includes
+visible files below `public`, while `.output/**` excludes the hidden root.
+An explicitly selected visible file inside a hidden parent can also be included.
+If GitHub upload fails and the fallback resolves no files, the action fails even
+with `if-no-files-found: warn` or `ignore`, so an empty fallback cannot hide the
+original upload failure. Normal GitHub no-file handling remains unchanged.
 There is no Python, AWS CLI, npm or pip installation in the workflow. S3 file
 transfers still run in Bash with curl.
 
@@ -189,7 +195,13 @@ download can recover only data already uploaded to S3. Mirroring every upload is
 required for guaranteed copies in both backends. If rerun producers change upload
 backend, the backends can contain different versions of an artifact.
 
-Real SeaweedFS verification needs a workflow run with the organization secrets.
+The [caller run](https://github.com/svtechnmaa/stacked_charts/actions/runs/39928656906)
+verifies normal SeaweedFS upload/download. Before relying
+on `overwrite: false` with a deployed SeaweedFS version, use a unique scratch key
+to perform two signed PUTs with `If-None-Match: *`. The second must return HTTP
+412, and a subsequent GET must still return the first payload. Record the tested
+SeaweedFS version alongside the deployment configuration. This conditional-PUT
+check requires endpoint credentials and is not covered by the local mock tests.
 
 ## Local regression checks
 

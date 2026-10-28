@@ -13,6 +13,19 @@ trap cleanup EXIT
 archive="$temp_dir/content"
 headers="$temp_dir/headers"
 
+# Earlier curl versions do not use x-amz-content-sha256 as the payload hash
+# when signing --upload-file, so they cannot authenticate these S3 PUTs.
+if ! curl_version=$(curl --version) || [[ ! "$curl_version" =~ ^curl[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+  echo '::error::Unable to determine curl version; S3 fallback requires curl 7.87.0 or newer.'
+  exit 1
+fi
+curl_major=${BASH_REMATCH[1]}
+curl_minor=${BASH_REMATCH[2]}
+if ((10#$curl_major < 7 || (10#$curl_major == 7 && 10#$curl_minor < 87))); then
+  echo "::error::S3 fallback requires curl 7.87.0 or newer for SigV4 uploads; found $curl_major.$curl_minor.${BASH_REMATCH[3]}."
+  exit 1
+fi
+
 if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
   echo "::error::GitHub artifact failed and S3_ARTIFACT_ACCESS_KEY / S3_ARTIFACT_SECRET_KEY are unavailable."
   exit 1

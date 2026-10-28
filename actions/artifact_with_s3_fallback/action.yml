@@ -86,7 +86,7 @@ runs:
       id: upload
       if: ${{ always() && steps.validate.outcome == 'success' && inputs.operation == 'upload' }}
       continue-on-error: true
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
@@ -101,7 +101,7 @@ runs:
       id: download
       if: ${{ always() && steps.validate.outcome == 'success' && inputs.operation == 'download' }}
       continue-on-error: true
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
@@ -109,7 +109,7 @@ runs:
     - name: Resolve S3 upload files
       id: files
       if: ${{ always() && steps.upload.outcome == 'failure' }}
-      uses: actions/github-script@v8
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
         ARTIFACT_PATH: ${{ inputs.path }}

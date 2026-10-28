@@ -9,22 +9,25 @@ module.exports = async ({glob, core}) => {
     implicitDescendants: true,
     omitBrokenSymbolicLinks: true,
   });
+  const roots = matcher.getSearchPaths();
+  // glob starts walking at each search root. Hidden ancestors above that root
+  // are not visited, but a hidden root itself prevents traversal.
+  const visibleFromSearchRoot = file => roots.some(root => {
+    const relative = path.relative(root, file);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    return [path.basename(root), ...relative.split(path.sep)]
+      .every(segment => !segment.startsWith('.'));
+  });
   const files = [];
   for (const file of await matcher.glob()) {
     // github-script@v8 supplies glob 0.4.0, which ignores excludeHiddenFiles.
-    // Check every segment, including parents of explicitly matched files.
-    const segments = path.relative(process.cwd(), file).split(path.sep);
-    if (env.ARTIFACT_HIDDEN !== 'true' && segments.some(segment =>
-      segment.startsWith('.') && segment !== '..' && segment !== '.')) continue;
+    if (env.ARTIFACT_HIDDEN !== 'true' && !visibleFromSearchRoot(file)) continue;
     if ((await fs.stat(file)).isFile()) files.push(file);
   }
   if (files.length === 0) {
-    core.setOutput('empty', 'true');
-    if (env.ARTIFACT_NO_FILES === 'error') {
-      throw new Error('No files matched the artifact upload paths');
-    }
-    if (env.ARTIFACT_NO_FILES === 'warn') core.warning('No files matched the artifact upload paths');
-    return;
+    // This resolver runs only after GitHub upload failed. Do not turn that
+    // failure into success without storing an artifact in either backend.
+    throw new Error('No files matched the artifact upload paths after GitHub upload failed; S3 fallback cannot recover the artifact');
   }
   const archive = env.ARTIFACT_ARCHIVE !== 'false';
   if (!archive && files.length !== 1) {
@@ -35,7 +38,6 @@ module.exports = async ({glob, core}) => {
   if (!name || /[\\/":<>|*?\x00-\x1f]/.test(name) || name === '.' || name === '..') {
     throw new Error('Invalid artifact name');
   }
-  const roots = matcher.getSearchPaths();
   let root = roots[0];
   if (roots.length === 1 && files.length === 1 && root === files[0]) {
     root = path.dirname(root);
