@@ -56,6 +56,10 @@ inputs:
     description: Trivy server URL. The image scan falls back to a local scan when unavailable.
     required: false
     default: ""
+  ignore_finding:
+    description: Allow HIGH/CRITICAL image vulnerability or secret findings without failing the job. Scan errors still fail.
+    required: false
+    default: "false"
   mail_username:
     description: SMTP username used by the shared Trivy scan actions.
     required: false
@@ -302,6 +306,7 @@ runs:
       uses: svtechnmaa/.github/actions/run_trivy_scan_image@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
+        ignore_finding: ${{ inputs.ignore_finding }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: latest
         commit_id: ${{ env.COMMIT_FULL_ID }}
