@@ -41,7 +41,7 @@ inputs:
     required: false
     default: ""
   push_token:
-    description: Token used to query the current Actions job. Defaults to github_token.
+    description: Legacy input retained for existing callers. The current job ID comes from the job context.
     required: false
     default: ""
   docker_hub_username:
@@ -212,24 +212,6 @@ runs:
         fi
         echo "should_build=${should_build}" >> "${GITHUB_OUTPUT}"
 
-    - name: Get job ID
-      id: get_job_id
-      if: >-
-        steps.build_plan.outputs.should_build == 'true' &&
-        inputs.enable_scans == 'true' &&
-        steps.check_commit_message.outputs.no_scan != 'true'
-      shell: bash
-      env:
-        ACTIONS_TOKEN: ${{ inputs.push_token || inputs.github_token }}
-      run: |
-        set -euo pipefail
-        job_id="$(curl --silent --show-error --fail \
-          --header "Authorization: Bearer ${ACTIONS_TOKEN}" \
-          --header "Accept: application/vnd.github+json" \
-          "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
-          | jq -r --arg job "${GITHUB_JOB}" '[.jobs[] | select(.name == $job)][0].id // empty')"
-        echo "job_id=${job_id}" >> "${GITHUB_OUTPUT}"
-
     - name: Determine commit author
       id: commit_author
       if: steps.build_plan.outputs.should_build == 'true'
@@ -267,7 +249,7 @@ runs:
       env:
         BUILD_CONTEXT: ${{ inputs.build_context }}
         DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
-      run: docker build --no-cache --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}" "${BUILD_CONTEXT}"
+      run: docker build --no-cache --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}:latest" --tag "${IMAGE_NAME}:${COMMIT_SHORT_ID}" "${BUILD_CONTEXT}"
 
     - name: Build Docker image with cache
       if: >-
@@ -281,7 +263,7 @@ runs:
         docker pull "ghcr.io/${REPO}:latest" || true
         docker build --build-arg BUILDKIT_INLINE_CACHE=1 \
           --cache-from "ghcr.io/${REPO}:latest" \
-          --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}" "${BUILD_CONTEXT}"
+          --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}:latest" --tag "${IMAGE_NAME}:${COMMIT_SHORT_ID}" "${BUILD_CONTEXT}"
 
     - name: Scan Dockerfile using Trivy
       if: >-
@@ -296,7 +278,7 @@ runs:
         mail_password: ${{ inputs.mail_password }}
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
-        job_id: ${{ steps.get_job_id.outputs.job_id }}
+        job_id: ${{ job.check_run_id }}
 
     - name: Scan Docker image using Trivy
       if: >-
@@ -308,13 +290,13 @@ runs:
         trivy_server: ${{ inputs.trivy_server }}
         ignore_finding: ${{ inputs.ignore_finding }}
         image_name: ${{ env.IMAGE_NAME }}
-        image_tag: latest
+        image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         mail_username: ${{ inputs.mail_username }}
         mail_password: ${{ inputs.mail_password }}
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
-        job_id: ${{ steps.get_job_id.outputs.job_id }}
+        job_id: ${{ job.check_run_id }}
 
     - name: Run application container
       if: >-

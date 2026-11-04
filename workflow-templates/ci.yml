@@ -56,6 +56,7 @@ jobs:
           container_mapping_port: ${{ env.CONTAINER_MAPPING_PORT }}
           dockerfile_path: ${{ env.DOCKERFILE_PATH }}
           commit_id: ${{ env.COMMIT_FULL_ID }}
+          ignore_finding: 'false'
           github_token: ${{ secrets.GH_TOKEN }}
           push_token: ${{ secrets.PUSH_TOKEN }}
           docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
