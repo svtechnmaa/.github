@@ -40,10 +40,6 @@ inputs:
     description: Token used to read and publish GHCR packages.
     required: false
     default: ""
-  push_token:
-    description: Legacy input retained for existing callers. The current job ID comes from the job context.
-    required: false
-    default: ""
   docker_hub_username:
     description: Docker Hub username. Login is skipped when either credential is empty.
     required: false
@@ -57,7 +53,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: Allow HIGH/CRITICAL image vulnerability or secret findings without failing the job. Scan errors still fail.
+    description: Fail the job on HIGH/CRITICAL image vulnerabilities or secrets by default. Set to true to allow the job to pass
     required: false
     default: "false"
   mail_username:
