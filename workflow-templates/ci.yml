@@ -58,7 +58,6 @@ jobs:
           commit_id: ${{ env.COMMIT_FULL_ID }}
           ignore_finding: 'false'
           github_token: ${{ secrets.GH_TOKEN }}
-          push_token: ${{ secrets.PUSH_TOKEN }}
           docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
           docker_hub_access_token: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
           trivy_server: ${{ secrets.TRIVY_SERVER }}
