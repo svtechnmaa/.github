@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: "00 2 * * 5"
   workflow_dispatch:
+  push: # TEMP: test on branch, remove before merge
+    branches: [feat/schedule-image-scan]
 
 permissions:
   contents: read
