@@ -1,0 +1,270 @@
+name: Weekly Org Image Trivy Scan
+
+on:
+  schedule:
+    - cron: "00 2 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ORG_NAME: svtechnmaa
+  SCAN_TIMEZONE: Asia/Ho_Chi_Minh
+
+jobs:
+   Schedule-Image-Scan:
+    runs-on: trivy-dind
+    steps:
+        - name: List latest image of all packages
+          run: |
+            set -euo pipefail
+            mkdir -p tmp
+            : > tmp/packages.txt
+            : > tmp/images.txt
+            page=1
+            while true; do
+              response="$(curl -sS --fail \
+                -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/orgs/${{ env.ORG_NAME }}/packages?package_type=container&per_page=100&page=${page}")"
+              count="$(echo "${response}" | jq 'length')"
+              if [ "${count}" -eq 0 ]; then
+                break
+              fi
+              echo "${response}" | jq -r '.[].name' >> tmp/packages.txt
+              page=$((page + 1))
+            done
+            while read -r package; do
+              encoded_package="$(jq -rn --arg p "${package}" '$p | @uri')"
+              versions="$(curl -sS --fail \
+                -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/orgs/${{ env.ORG_NAME }}/packages/container/${encoded_package}/versions?per_page=100")" || continue
+              latest_tag="$(echo "${versions}" | jq -r '
+                [ .[] | {created_at, tags: ((.metadata.container.tags // []) | map(select((test("^sha256-") or test("cache$")) | not)))} | select(.tags | length > 0) ]
+                | sort_by(.created_at) | last | .tags[0] // empty')"
+              if [ -n "${latest_tag}" ]; then
+                echo "ghcr.io/${{ env.ORG_NAME }}/${package}:${latest_tag}" >> tmp/images.txt
+              fi
+            done < tmp/packages.txt
+            cat tmp/images.txt
+
+        - name: Trivy scan on all images
+          env:
+            TRIVY_USERNAME: ${{ github.actor }}
+            TRIVY_PASSWORD: ${{ secrets.GH_TOKEN }}
+          run: |
+            set -euo pipefail
+            mkdir -p /tmp/trivy-image-result
+            while read -r image; do
+              image_name="$(echo "${image#ghcr.io/${{ env.ORG_NAME }}/}" | tr '/:' '__')"
+              echo "Running Trivy scan on ${image}"
+              trivy image -f json -o /tmp/trivy-image-result/"${image_name}".json --scanners vuln --skip-version-check --severity HIGH,CRITICAL "${image}" < /dev/null || true
+            done < tmp/images.txt
+            echo "All images are scanned"
+
+        - name: Write Trivy summary
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-image-result"
+            total_images=0
+            total_critical=0
+            total_high=0
+            write_scan_env() {
+              local scan_status="FAILED"
+              total_findings="${total_findings:-0}"
+              if [ "${total_findings}" -eq 0 ]; then
+                scan_status="PASSED"
+              fi
+              {
+                echo "TOTAL_IMAGES=${total_images}"
+                echo "TOTAL_CRITICAL=${total_critical}"
+                echo "TOTAL_HIGH=${total_high}"
+                echo "TOTAL_FINDINGS=${total_findings}"
+                echo "SCAN_STATUS=${scan_status}"
+              } >> "$GITHUB_ENV"
+            }
+            if [ ! -d "$REPORT_DIR" ]; then
+              {
+                echo "# 🔍 Trivy Organization Image Scan"
+                echo ""
+                echo "No Trivy report directory found: \`$REPORT_DIR\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              total_findings=0
+              write_scan_env
+              exit 0
+            fi
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+              total_images=$((total_images + 1))
+              total_critical=$((total_critical + critical))
+              total_high=$((total_high + high))
+            done
+            total_findings=$((total_critical + total_high))
+            {
+              echo "# 🔍 Trivy Organization Image Scan"
+              echo ""
+              echo "**Organization:** \`${ORG_NAME}\`"
+              echo ""
+              echo "**Images scanned:** ${total_images}"
+              echo ""
+              echo "## 📌 Total Findings"
+              echo ""
+              echo "| Category | Count | Status |"
+              echo "|----------|------:|:------:|"
+              echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
+              echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
+              echo ""
+              echo "**Total findings:** ${total_findings}"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            write_scan_env
+
+        - name: Write Trivy vulnerability details
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-image-result"
+            VULN_ROWS="/tmp/trivy-image-vulnerability-rows.tsv"
+
+            : > "$VULN_ROWS"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+            {
+              echo "## 🛡️ Vulnerability Details"
+              echo ""
+              echo "<details><summary>View HIGH / CRITICAL vulnerabilities</summary>"
+              echo ""
+              echo "| Image | Severity | CVE | Package | Installed | Fixed in | Target |"
+              echo "|-------|----------|-----|---------|-----------|----------|--------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              jq -r '
+                def severity_rank:
+                  if . == "CRITICAL" then 0
+                  elif . == "HIGH" then 1
+                  else 9
+                  end;
+                .ArtifactName as $image |
+                .Results[]? |
+                .Target as $target |
+                .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                "\(.Severity | severity_rank)\t\($image)\t\(.VulnerabilityID)\t| `\($image)` | \(.Severity) | [\(.VulnerabilityID)](\(.PrimaryURL // "")) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \($target // "-") |"
+              ' "$report" >> "$VULN_ROWS" || true
+            done
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Set scan timestamp
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            scan_timestamp="$(TZ="${SCAN_TIMEZONE}" date '+%A, %Y-%m-%d %H:%M:%S %Z')"
+            scan_date="$(TZ="${SCAN_TIMEZONE}" date '+%Y-%m-%d')"
+            scan_time="$(TZ="${SCAN_TIMEZONE}" date '+%H:%M:%S %Z')"
+            {
+              echo "SCAN_TIMESTAMP=${scan_timestamp}"
+              echo "SCAN_DATE=${scan_date}"
+              echo "SCAN_TIME=${scan_time}"
+            } >> "$GITHUB_ENV"
+
+        - name: Build weekly Trivy CSV report
+          if: always()
+          shell: bash
+          run: |
+            set -euo pipefail
+            REPORT_DIR="/tmp/trivy-image-result"
+            CSV_REPORT="weekly-image-trivy-report.csv"
+
+            jq -n -r '[
+              "Image",
+              "Severity",
+              "ID",
+              "Title",
+              "Package",
+              "Installed Version",
+              "Fixed Version",
+              "Target",
+              "URL"
+            ] | @csv' > "$CSV_REPORT"
+
+            [ -d "$REPORT_DIR" ] || exit 0
+
+            for report in "$REPORT_DIR"/*.json; do
+              [ -f "$report" ] || continue
+              jq -r '
+                .ArtifactName as $image |
+                .Results[]? |
+                .Target as $target |
+                .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                [
+                  $image,
+                  (.Severity // ""),
+                  (.VulnerabilityID // ""),
+                  (.Title // ""),
+                  (.PkgName // ""),
+                  (.InstalledVersion // ""),
+                  (.FixedVersion // ""),
+                  ($target // ""),
+                  (.PrimaryURL // "")
+                ] | @csv
+              ' "$report" >> "$CSV_REPORT" || true
+            done
+
+        - name: Build weekly Trivy mail body
+          if: always()
+          shell: bash
+          run: |
+            {
+              echo "Weekly Trivy Organization Image Scan — ${SCAN_STATUS}"
+              echo "================================================="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Findings summary"
+              echo "----------------"
+              echo "Images scanned                : ${TOTAL_IMAGES:-0}"
+              echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
+              echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
+              echo "Total findings                : ${TOTAL_FINDINGS:-0}"
+              echo ""
+              echo "Detailed findings are shown in the GitHub Actions Summary tab."
+              echo "A CSV copy is attached to this email for retention."
+              echo ""
+              echo "Please check the full summary here:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Note:"
+              echo "- This weekly scan only scans the latest image of each GHCR package."
+              echo "- This weekly scan includes HIGH and CRITICAL findings only."
+            } > weekly-image-trivy-report.txt
+
+        # - name: Mail weekly Trivy report
+        #   if: always()
+        #   uses: dawidd6/action-send-mail@v16
+        #   with:
+        #     server_address: smtp.gmail.com
+        #     server_port: 465
+        #     username:  ${{ vars.MAIL_USERNAME }}
+        #     password: ${{ secrets.MAIL_PASSWORD }}
+        #     subject: "[Trivy Weekly Image] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
+        #     to: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+        #     from: Security Bot <${{ vars.MAIL_USERNAME }}>
+        #     body: file://weekly-image-trivy-report.txt
+        #     attachments: weekly-image-trivy-report.csv
