@@ -11,8 +11,6 @@ permissions:
 env:
   ORG_NAME: svtechnmaa
   SCAN_TIMEZONE: Asia/Ho_Chi_Minh
-  # newest: newest pushed image without dev/test tags | latest: only the "latest" tag
-  TAG_MODE: newest
 
 jobs:
    Schedule-Image-Scan:
@@ -38,12 +36,9 @@ jobs:
               echo "${response}" | jq -r '.[].name' >> tmp/packages.txt
               page=$((page + 1))
             done
-            # Tags to ignore: dev, test, bug, fix, rc, beta... and cosign/cache tags
-            skip_regex='(^|[-_.])(dev|develop|test|testing|bug|fix|hotfix|debug|old|tmp|temp|wip|rc|alpha|beta|cache|buildcache)([-_.0-9]|$)|^sha256-'
-            release_regex='^v?[0-9]+(\.[0-9]+)+'
             while read -r package; do
               encoded_package="$(jq -rn --arg p "${package}" '$p | @uri')"
-              : > tmp/versions.jsonl
+              has_latest=false
               page=1
               while true; do
                 versions="$(curl -sS --fail \
@@ -54,37 +49,21 @@ jobs:
                 if [ "${count}" -eq 0 ]; then
                   break
                 fi
-                echo "${versions}" | jq -c '.[] | {created_at, tags: (.metadata.container.tags // [])}' >> tmp/versions.jsonl
+                if echo "${versions}" | jq -e 'any(.[]; (.metadata.container.tags // []) | index("latest"))' > /dev/null; then
+                  has_latest=true
+                  break
+                fi
                 page=$((page + 1))
               done
-              if [ "${TAG_MODE}" = "latest" ]; then
-                selected_tag="$(jq -rs 'if any(.[]; .tags | index("latest")) then "latest" else empty end' tmp/versions.jsonl)"
-              else
-                # Newest pushed version that still has a tag after dropping dev/test tags.
-                # Prefer a release tag, then "latest", then any remaining tag.
-                selected_tag="$(jq -rs --arg skip "${skip_regex}" --arg re "${release_regex}" '
-                  map(.tags |= map(select(test($skip; "i") | not)) | select(.tags | length > 0))
-                  | sort_by(.created_at) | last
-                  | if . == null then empty
-                    else .tags | ((map(select(test($re))) | first) // (map(select(. == "latest")) | first) // first)
-                    end' tmp/versions.jsonl)"
-              fi
-              if [ -n "${selected_tag}" ]; then
-                echo "ghcr.io/${{ env.ORG_NAME }}/${package}:${selected_tag}" >> tmp/images.txt
+              if [ "${has_latest}" = "true" ]; then
+                echo "ghcr.io/${{ env.ORG_NAME }}/${package}:latest" >> tmp/images.txt
               else
                 echo "${package}" >> tmp/skipped.txt
               fi
             done < tmp/packages.txt
-            if [ "${TAG_MODE}" = "latest" ]; then
-              skip_reason="no latest tag"
-            else
-              skip_reason="only dev/test tags"
-            fi
-            echo "SKIP_REASON=${skip_reason}" >> "$GITHUB_ENV"
-            echo "Tag mode: ${TAG_MODE}"
             echo "Images to scan:"
             cat tmp/images.txt
-            echo "Skipped (${skip_reason}):"
+            echo "Skipped (no latest tag):"
             cat tmp/skipped.txt
 
         - name: Trivy scan on all images
@@ -172,7 +151,7 @@ jobs:
               done
               echo ""
               if [ -s tmp/skipped.txt ]; then
-                echo "<details><summary>Skipped packages (${SKIP_REASON:-skipped}): $(wc -l < tmp/skipped.txt | tr -d ' ')</summary>"
+                echo "<details><summary>Skipped packages (no latest tag): $(wc -l < tmp/skipped.txt | tr -d ' ')</summary>"
                 echo ""
                 sed 's/^/- `/; s/$/`/' tmp/skipped.txt
                 echo ""
@@ -320,7 +299,7 @@ jobs:
               echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               echo ""
               echo "Note:"
-              echo "- This weekly scan only scans the latest image of each GHCR package."
+              echo "- This weekly scan only scans the 'latest' tag of each GHCR package."
               echo "- This weekly scan includes HIGH and CRITICAL findings only."
             } > weekly-image-trivy-report.txt
 
