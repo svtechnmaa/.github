@@ -13,6 +13,8 @@ permissions:
 env:
   ORG_NAME: svtechnmaa
   SCAN_TIMEZONE: Asia/Ho_Chi_Minh
+  # newest: newest pushed image without dev/test tags | latest: only the "latest" tag
+  TAG_MODE: latest # TEMP: test with latest tag, switch back to newest before merge
 
 jobs:
    Schedule-Image-Scan:
@@ -24,6 +26,7 @@ jobs:
             mkdir -p tmp
             : > tmp/packages.txt
             : > tmp/images.txt
+            : > tmp/skipped.txt
             page=1
             while true; do
               response="$(curl -sS --fail \
@@ -37,20 +40,54 @@ jobs:
               echo "${response}" | jq -r '.[].name' >> tmp/packages.txt
               page=$((page + 1))
             done
+            # Tags to ignore: dev, test, bug, fix, rc, beta... and cosign/cache tags
+            skip_regex='(^|[-_.])(dev|develop|test|testing|bug|fix|hotfix|debug|old|tmp|temp|wip|rc|alpha|beta|cache|buildcache)([-_.0-9]|$)|^sha256-'
+            release_regex='^v?[0-9]+(\.[0-9]+)+'
             while read -r package; do
               encoded_package="$(jq -rn --arg p "${package}" '$p | @uri')"
-              versions="$(curl -sS --fail \
-                -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/orgs/${{ env.ORG_NAME }}/packages/container/${encoded_package}/versions?per_page=100")" || continue
-              latest_tag="$(echo "${versions}" | jq -r '
-                [ .[] | {created_at, tags: ((.metadata.container.tags // []) | map(select((test("^sha256-") or test("cache$")) | not)))} | select(.tags | length > 0) ]
-                | sort_by(.created_at) | last | .tags[0] // empty')"
-              if [ -n "${latest_tag}" ]; then
-                echo "ghcr.io/${{ env.ORG_NAME }}/${package}:${latest_tag}" >> tmp/images.txt
+              : > tmp/versions.jsonl
+              page=1
+              while true; do
+                versions="$(curl -sS --fail \
+                  -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/orgs/${{ env.ORG_NAME }}/packages/container/${encoded_package}/versions?per_page=100&page=${page}")" || break
+                count="$(echo "${versions}" | jq 'length')"
+                if [ "${count}" -eq 0 ]; then
+                  break
+                fi
+                echo "${versions}" | jq -c '.[] | {created_at, tags: (.metadata.container.tags // [])}' >> tmp/versions.jsonl
+                page=$((page + 1))
+              done
+              if [ "${TAG_MODE}" = "latest" ]; then
+                selected_tag="$(jq -rs 'if any(.[]; .tags | index("latest")) then "latest" else empty end' tmp/versions.jsonl)"
+              else
+                # Newest pushed version that still has a tag after dropping dev/test tags.
+                # Prefer a release tag, then "latest", then any remaining tag.
+                selected_tag="$(jq -rs --arg skip "${skip_regex}" --arg re "${release_regex}" '
+                  map(.tags |= map(select(test($skip; "i") | not)) | select(.tags | length > 0))
+                  | sort_by(.created_at) | last
+                  | if . == null then empty
+                    else .tags | ((map(select(test($re))) | first) // (map(select(. == "latest")) | first) // first)
+                    end' tmp/versions.jsonl)"
+              fi
+              if [ -n "${selected_tag}" ]; then
+                echo "ghcr.io/${{ env.ORG_NAME }}/${package}:${selected_tag}" >> tmp/images.txt
+              else
+                echo "${package}" >> tmp/skipped.txt
               fi
             done < tmp/packages.txt
+            if [ "${TAG_MODE}" = "latest" ]; then
+              skip_reason="no latest tag"
+            else
+              skip_reason="only dev/test tags"
+            fi
+            echo "SKIP_REASON=${skip_reason}" >> "$GITHUB_ENV"
+            echo "Tag mode: ${TAG_MODE}"
+            echo "Images to scan:"
             cat tmp/images.txt
+            echo "Skipped (${skip_reason}):"
+            cat tmp/skipped.txt
 
         - name: Trivy scan on all images
           env:
@@ -72,9 +109,13 @@ jobs:
           run: |
             set -euo pipefail
             REPORT_DIR="/tmp/trivy-image-result"
+            IMAGE_ROWS="/tmp/trivy-image-rows.tsv"
             total_images=0
             total_critical=0
             total_high=0
+            total_fixable=0
+            unique_cves=0
+            : > "$IMAGE_ROWS"
             write_scan_env() {
               local scan_status="FAILED"
               total_findings="${total_findings:-0}"
@@ -85,6 +126,8 @@ jobs:
                 echo "TOTAL_IMAGES=${total_images}"
                 echo "TOTAL_CRITICAL=${total_critical}"
                 echo "TOTAL_HIGH=${total_high}"
+                echo "TOTAL_FIXABLE=${total_fixable}"
+                echo "UNIQUE_CVES=${unique_cves}"
                 echo "TOTAL_FINDINGS=${total_findings}"
                 echo "SCAN_STATUS=${scan_status}"
               } >> "$GITHUB_ENV"
@@ -101,12 +144,23 @@ jobs:
             fi
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
-              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
-              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+              read -r critical high fixable < <(jq -r '
+                [.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] |
+                [
+                  (map(select(.Severity == "CRITICAL")) | length),
+                  (map(select(.Severity == "HIGH")) | length),
+                  (map(select((.FixedVersion // "") != "")) | length)
+                ] | @tsv' "$report")
+              image="$(jq -r '.ArtifactName // "unknown"' "$report")"
+              printf '%s\t%s\t%s\t%s\n' "$critical" "$high" "$fixable" "$image" >> "$IMAGE_ROWS"
               total_images=$((total_images + 1))
               total_critical=$((total_critical + critical))
               total_high=$((total_high + high))
+              total_fixable=$((total_fixable + fixable))
             done
+            if [ "$total_images" -gt 0 ]; then
+              unique_cves="$(jq -s '[.[].Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | .VulnerabilityID] | unique | length' "$REPORT_DIR"/*.json)"
+            fi
             total_findings=$((total_critical + total_high))
             {
               echo "# 🔍 Trivy Organization Image Scan"
@@ -122,8 +176,24 @@ jobs:
               echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
               echo ""
-              echo "**Total findings:** ${total_findings}"
+              echo "**Total findings:** ${total_findings} · **Fixable (has a fixed version):** ${total_fixable} · **Unique CVEs:** ${unique_cves}"
               echo ""
+              echo "## 🐳 Images"
+              echo ""
+              echo "| Image | Critical | High | Fixable | Status |"
+              echo "|-------|---------:|-----:|--------:|:------:|"
+              sort -t $'\t' -k1,1nr -k2,2nr -k4,4 "$IMAGE_ROWS" | while IFS=$'\t' read -r critical high fixable image; do
+                echo "| \`${image}\` | ${critical} | ${high} | ${fixable} | $([ $((critical + high)) -eq 0 ] && echo "✅" || echo "❌") |"
+              done
+              echo ""
+              if [ -s tmp/skipped.txt ]; then
+                echo "<details><summary>Skipped packages (${SKIP_REASON:-skipped}): $(wc -l < tmp/skipped.txt | tr -d ' ')</summary>"
+                echo ""
+                sed 's/^/- `/; s/$/`/' tmp/skipped.txt
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
             write_scan_env
 
@@ -134,6 +204,7 @@ jobs:
             set -euo pipefail
             REPORT_DIR="/tmp/trivy-image-result"
             VULN_ROWS="/tmp/trivy-image-vulnerability-rows.tsv"
+            DETAILS="/tmp/trivy-image-details.md"
 
             : > "$VULN_ROWS"
 
@@ -145,7 +216,7 @@ jobs:
               echo ""
               echo "| Image | Severity | CVE | Package | Installed | Fixed in | Target |"
               echo "|-------|----------|-----|---------|-----------|----------|--------|"
-            } >> "$GITHUB_STEP_SUMMARY"
+            } > "$DETAILS"
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
               jq -r '
@@ -162,12 +233,23 @@ jobs:
                 "\(.Severity | severity_rank)\t\($image)\t\(.VulnerabilityID)\t| `\($image)` | \(.Severity) | [\(.VulnerabilityID)](\(.PrimaryURL // "")) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") | \($target // "-") |"
               ' "$report" >> "$VULN_ROWS" || true
             done
-            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$GITHUB_STEP_SUMMARY"
+            sort -t $'\t' -k1,1n -k2,2 -k3,3 "$VULN_ROWS" | cut -f4- >> "$DETAILS"
             {
               echo ""
               echo "</details>"
               echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
+            } >> "$DETAILS"
+            # Step summary is limited to 1 MiB
+            if [ "$(wc -c < "$DETAILS")" -gt 900000 ]; then
+              {
+                echo "## 🛡️ Vulnerability Details"
+                echo ""
+                echo "Too many findings to display here. Download the CSV from the workflow artifacts."
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              cat "$DETAILS" >> "$GITHUB_STEP_SUMMARY"
+            fi
 
         - name: Set scan timestamp
           if: always()
@@ -245,6 +327,8 @@ jobs:
               echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
               echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
+              echo "Fixable findings              : ${TOTAL_FIXABLE:-0}"
+              echo "Unique CVEs                   : ${UNIQUE_CVES:-0}"
               echo ""
               echo "Detailed findings are shown in the GitHub Actions Summary tab."
               echo "A CSV copy is attached to this email for retention."
@@ -270,3 +354,13 @@ jobs:
         #     from: Security Bot <${{ vars.MAIL_USERNAME }}>
         #     body: file://weekly-image-trivy-report.txt
         #     attachments: weekly-image-trivy-report.csv
+
+        - name: Upload artifacts
+          if: always()
+          uses: actions/upload-artifact@v7
+          with:
+            name: weekly-image-trivy-report-${{ env.SCAN_DATE }}
+            path: weekly-image-trivy-report.csv
+            retention-days: 30
+            if-no-files-found: ignore
+          continue-on-error: true
