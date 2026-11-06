@@ -10,6 +10,10 @@ inputs:
     description: "Trivy server URL (if using server mode)"
     required: false
     default: ""
+  ignore_finding:
+    description: "Fail the job on HIGH/CRITICAL build context findings by default. Set to true to allow the job to pass."
+    required: false
+    default: "false"
   mail_username:
     description: "SMTP username for sending email"
     required: true
@@ -380,3 +384,35 @@ runs:
         to: ${{ env.MAIL_RECEIVERS }}
         from: Security Bot <${{ inputs.mail_username }}>
       continue-on-error: true
+
+    - name: Evaluate result
+      if: always()
+      shell: bash
+      env:
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
+      run: |
+        FAIL=0
+        if [ "$SCAN_OUTCOME" != "success" ] || [ "${SCAN_OK:-false}" != "true" ]; then
+          echo "❌ Trivy Dockerfile scan failed or did not produce a valid report."
+          FAIL=1
+        fi
+        if [ "${SECRET:-0}" -gt 0 ]; then
+          echo "❌ $SECRET HIGH/CRITICAL secret finding(s) in the build context."
+        fi
+        if [ "${VULN:-0}" -gt 0 ]; then
+          echo "❌ $VULN HIGH/CRITICAL vulnerability finding(s) in the build context."
+        fi
+        if [ "${MISCONF:-0}" -gt 0 ]; then
+          echo "❌ $MISCONF HIGH/CRITICAL Dockerfile misconfiguration finding(s)."
+        fi
+        if [ "${SECRET:-0}" -gt 0 ] || [ "${VULN:-0}" -gt 0 ] || [ "${MISCONF:-0}" -gt 0 ]; then
+          if [ "$IGNORE_FINDING" = "true" ]; then
+            echo "⚠️ ignore_finding=true; allowing Dockerfile build context findings without ignoring scan failures."
+          else
+            FAIL=1
+          fi
+        elif [ "$FAIL" -eq 0 ]; then
+          echo "✅ No blocking Dockerfile build context findings."
+        fi
+        exit "$FAIL"

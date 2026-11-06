@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: "Allow the job to succeed with HIGH/CRITICAL vulnerability or secret findings; scan failures still fail"
+    description: "Fail the job on HIGH/CRITICAL image vulnerabilities or secrets by default. Set to true to allow the job to pass"
     required: false
     default: "false"
   mail_username:
