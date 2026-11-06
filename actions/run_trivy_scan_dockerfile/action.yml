@@ -11,7 +11,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: "Fail the job on HIGH/CRITICAL image vulnerabilities or secrets by default. Set to true to allow the job to pass"
+    description: "Fail the job on HIGH/CRITICAL build context findings by default. Set to true to allow the job to pass."
     required: false
     default: "false"
   mail_username:
