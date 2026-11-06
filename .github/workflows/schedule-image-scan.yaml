@@ -4,8 +4,6 @@ on:
   schedule:
     - cron: "00 2 * * 5"
   workflow_dispatch:
-  push: # TEMP: test on branch, remove before merge
-    branches: [feat/schedule-image-scan]
 
 permissions:
   contents: read
@@ -14,7 +12,7 @@ env:
   ORG_NAME: svtechnmaa
   SCAN_TIMEZONE: Asia/Ho_Chi_Minh
   # newest: newest pushed image without dev/test tags | latest: only the "latest" tag
-  TAG_MODE: latest # TEMP: test with latest tag, switch back to newest before merge
+  TAG_MODE: newest
 
 jobs:
    Schedule-Image-Scan:
@@ -326,19 +324,19 @@ jobs:
               echo "- This weekly scan includes HIGH and CRITICAL findings only."
             } > weekly-image-trivy-report.txt
 
-        # - name: Mail weekly Trivy report
-        #   if: always()
-        #   uses: dawidd6/action-send-mail@v16
-        #   with:
-        #     server_address: smtp.gmail.com
-        #     server_port: 465
-        #     username:  ${{ vars.MAIL_USERNAME }}
-        #     password: ${{ secrets.MAIL_PASSWORD }}
-        #     subject: "[Trivy Weekly Image] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
-        #     to: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
-        #     from: Security Bot <${{ vars.MAIL_USERNAME }}>
-        #     body: file://weekly-image-trivy-report.txt
-        #     attachments: weekly-image-trivy-report.csv
+        - name: Mail weekly Trivy report
+          if: always()
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: smtp.gmail.com
+            server_port: 465
+            username:  ${{ vars.MAIL_USERNAME }}
+            password: ${{ secrets.MAIL_PASSWORD }}
+            subject: "[Trivy Weekly Image] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
+            to: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+            from: Security Bot <${{ vars.MAIL_USERNAME }}>
+            body: file://weekly-image-trivy-report.txt
+            attachments: weekly-image-trivy-report.csv
 
         - name: Upload artifacts
           if: always()
