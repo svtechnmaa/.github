@@ -113,8 +113,6 @@ jobs:
             total_images=0
             total_critical=0
             total_high=0
-            total_fixable=0
-            unique_cves=0
             : > "$IMAGE_ROWS"
             write_scan_env() {
               local scan_status="FAILED"
@@ -126,8 +124,6 @@ jobs:
                 echo "TOTAL_IMAGES=${total_images}"
                 echo "TOTAL_CRITICAL=${total_critical}"
                 echo "TOTAL_HIGH=${total_high}"
-                echo "TOTAL_FIXABLE=${total_fixable}"
-                echo "UNIQUE_CVES=${unique_cves}"
                 echo "TOTAL_FINDINGS=${total_findings}"
                 echo "SCAN_STATUS=${scan_status}"
               } >> "$GITHUB_ENV"
@@ -144,23 +140,14 @@ jobs:
             fi
             for report in "$REPORT_DIR"/*.json; do
               [ -f "$report" ] || continue
-              read -r critical high fixable < <(jq -r '
-                [.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] |
-                [
-                  (map(select(.Severity == "CRITICAL")) | length),
-                  (map(select(.Severity == "HIGH")) | length),
-                  (map(select((.FixedVersion // "") != "")) | length)
-                ] | @tsv' "$report")
+              critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+              high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
               image="$(jq -r '.ArtifactName // "unknown"' "$report")"
-              printf '%s\t%s\t%s\t%s\n' "$critical" "$high" "$fixable" "$image" >> "$IMAGE_ROWS"
+              printf '%s\t%s\t%s\n' "$critical" "$high" "$image" >> "$IMAGE_ROWS"
               total_images=$((total_images + 1))
               total_critical=$((total_critical + critical))
               total_high=$((total_high + high))
-              total_fixable=$((total_fixable + fixable))
             done
-            if [ "$total_images" -gt 0 ]; then
-              unique_cves="$(jq -s '[.[].Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH") | .VulnerabilityID] | unique | length' "$REPORT_DIR"/*.json)"
-            fi
             total_findings=$((total_critical + total_high))
             {
               echo "# 🔍 Trivy Organization Image Scan"
@@ -176,14 +163,14 @@ jobs:
               echo "| 🔴 Critical Vulnerabilities | ${total_critical} | $([ "$total_critical" = "0" ] && echo "✅" || echo "❌") |"
               echo "| 🟠 High Vulnerabilities | ${total_high} | $([ "$total_high" = "0" ] && echo "✅" || echo "❌") |"
               echo ""
-              echo "**Total findings:** ${total_findings} · **Fixable (has a fixed version):** ${total_fixable} · **Unique CVEs:** ${unique_cves}"
+              echo "**Total findings:** ${total_findings}"
               echo ""
               echo "## 🐳 Images"
               echo ""
-              echo "| Image | Critical | High | Fixable | Status |"
-              echo "|-------|---------:|-----:|--------:|:------:|"
-              sort -t $'\t' -k1,1nr -k2,2nr -k4,4 "$IMAGE_ROWS" | while IFS=$'\t' read -r critical high fixable image; do
-                echo "| \`${image}\` | ${critical} | ${high} | ${fixable} | $([ $((critical + high)) -eq 0 ] && echo "✅" || echo "❌") |"
+              echo "| Image | Critical | High | Status |"
+              echo "|-------|---------:|-----:|:------:|"
+              sort -t $'\t' -k1,1nr -k2,2nr -k3,3 "$IMAGE_ROWS" | while IFS=$'\t' read -r critical high image; do
+                echo "| \`${image}\` | ${critical} | ${high} | $([ $((critical + high)) -eq 0 ] && echo "✅" || echo "❌") |"
               done
               echo ""
               if [ -s tmp/skipped.txt ]; then
@@ -327,8 +314,6 @@ jobs:
               echo "Critical vulnerabilities      : ${TOTAL_CRITICAL:-0}"
               echo "High vulnerabilities          : ${TOTAL_HIGH:-0}"
               echo "Total findings                : ${TOTAL_FINDINGS:-0}"
-              echo "Fixable findings              : ${TOTAL_FIXABLE:-0}"
-              echo "Unique CVEs                   : ${UNIQUE_CVES:-0}"
               echo ""
               echo "Detailed findings are shown in the GitHub Actions Summary tab."
               echo "A CSV copy is attached to this email for retention."
