@@ -73,6 +73,10 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
+  assert.match(data.values.subject, /FINDINGS TO REVIEW/);
+  assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
+  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> means these findings do not fail the build/);
+  assert.doesNotMatch(data.htmlMail, /IGNORE_FINDING/);
   assert.match(data.htmlMail, /OPEN FULL GITHUB SUMMARY/);
   assert.doesNotMatch(data.htmlMail, /secret-rule/);
 });
