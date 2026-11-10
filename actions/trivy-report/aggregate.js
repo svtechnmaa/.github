@@ -20,6 +20,12 @@ function clean(value) {
   return String(value ?? '-').replace(/[\r\n|]/g, ' ');
 }
 
+function html(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
 function table(items, columns) {
   if (!items.length) return '';
   return [
@@ -68,6 +74,9 @@ const gateFailed = totals.failures > 0 || scans.some((scan) =>
   !scan.ignoreFinding && scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0
 );
 const status = totals.failures ? 'Scan failed' : totalFindings ? 'Findings found' : 'Clean';
+const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS ALLOWED' : 'CLEAN';
+const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
+const cleanScans = scans.length - highlightedScans.length;
 
 const summary = [
   `# Trivy report — ${status}`,
@@ -107,21 +116,50 @@ for (const scan of scans) {
 fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary.join('\n')}\n`);
 
 const body = [
-  `Trivy report — ${status}`,
-  `Repository: ${env.GITHUB_REPOSITORY || ''}`,
-  `Run: ${runUrl}`,
+  `TRIVY SCAN — ${mailStatus}`,
+  `REPOSITORY: ${env.GITHUB_REPOSITORY || ''}`,
+  `FULL REPORT: ${runUrl}`,
   '',
-  `Scans: ${scans.length}; vulnerabilities: ${totals.vulnerabilities}; secrets: ${totals.secrets}; misconfigurations: ${totals.misconfigurations}; scan failures: ${totals.failures}`,
+  'FINDINGS SUMMARY',
+  `SCANS: ${scans.length} (${cleanScans} clean)`,
+  `VULNERABILITIES: ${totals.vulnerabilities}`,
+  `SECRETS: ${totals.secrets}`,
+  `MISCONFIGURATIONS: ${totals.misconfigurations}`,
+  `SCAN FAILURES: ${totals.failures}`,
   '',
-  ...scans.map((scan) => {
-    const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-    const result = !scan.scanOk ? 'SCAN FAILED' : count === 0 ? 'Clean' : scan.ignoreFinding ? 'Findings allowed by ignore_finding' : 'Blocking findings';
-    return `${scan.kind}: ${scan.target} — ${scan.vulnerabilities.length} vulnerabilities, ${scan.secrets.length} secrets, ${scan.misconfigurations.length} misconfigurations (${result})`;
+  'SCANS NEEDING ATTENTION',
+  ...highlightedScans.map((scan) => {
+    const result = !scan.scanOk ? 'SCAN FAILED' : scan.ignoreFinding ? 'FINDINGS ALLOWED BY IGNORE_FINDING' : 'BLOCKING FINDINGS';
+    return `${scan.kind.toUpperCase()}: ${scan.target} — ${scan.vulnerabilities.length} vulnerabilities, ${scan.secrets.length} secrets, ${scan.misconfigurations.length} misconfigurations (${result})`;
   }),
+  ...(!highlightedScans.length ? ['None'] : []),
   '',
-  'Open the run summary for finding details. Secret values are not included.',
+  'Open the workflow run Summary for CVEs, affected packages, fixed versions, files, and remediation details.',
+  'Secret values are never included in this email.',
 ];
 fs.writeFileSync(mailPath, `${body.join('\n')}\n`);
+
+const accent = totals.failures ? '#b42318' : gateFailed ? '#c2410c' : totalFindings ? '#9a6700' : '#1a7f37';
+const cards = [
+  ['VULNERABILITIES', totals.vulnerabilities],
+  ['SECRETS', totals.secrets],
+  ['MISCONFIGURATIONS', totals.misconfigurations],
+  ['SCAN FAILURES', totals.failures],
+].map(([label, count]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div></td>`).join('');
+const rows = highlightedScans.map((scan) => {
+  const result = !scan.scanOk ? 'SCAN FAILED' : scan.ignoreFinding ? 'ALLOWED BY IGNORE_FINDING' : 'ACTION REQUIRED';
+  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.vulnerabilities.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
+}).join('');
+const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
+<div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div></div>
+<h2 style="font-size:17px;margin-top:28px">FINDINGS SUMMARY</h2><p><strong>${scans.length} scans</strong> completed or attempted · <strong>${cleanScans} clean</strong></p>
+<table style="border-collapse:collapse;width:100%"><tr>${cards}</tr></table>
+<h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
+${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px">TARGET</th><th>VULNS</th><th>SECRETS</th><th>MISCONFIGS</th><th>STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
+<p style="margin-top:28px"><a href="${html(runUrl)}" style="display:inline-block;padding:12px 18px;background:#0969da;color:#fff;text-decoration:none;font-weight:700;border-radius:6px">OPEN FULL GITHUB SUMMARY</a></p>
+<p style="font-size:13px;color:#57606a">The Summary includes CVEs, affected packages, fixed versions, files, and remediation details. Secret values are not included in this email.</p>
+</body></html>`;
+fs.writeFileSync(mailPath.replace(/\.txt$/, '.html'), htmlBody);
 
 const recipients = [env.MAIL_RECEIVERS || '', totals.secrets ? env.IT_TEAM_EMAIL || '' : '']
   .join(',').split(',').map((value) => value.trim())
@@ -134,7 +172,8 @@ const outputs = {
   gate_failed: gateFailed,
   send_mail: totalFindings > 0 || totals.failures > 0,
   mail_receivers: uniqueRecipients.join(','),
-  subject: `[Trivy] ${status} — ${env.GITHUB_REPOSITORY || 'repository'}`,
+  subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,
+  artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
 };
 for (const [key, value] of Object.entries(outputs)) fs.appendFileSync(env.GITHUB_OUTPUT, `${key}=${value}\n`);
 return outputs;

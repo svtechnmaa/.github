@@ -68,6 +68,10 @@ inputs:
     description: Additional comma-separated vulnerability report recipients.
     required: false
     default: ""
+  trivy_mail_mode:
+    description: Use deferred with a downstream notify job so the Summary exists before mail is sent.
+    required: false
+    default: immediate
 
 outputs:
   check_no_ci:
@@ -97,6 +101,18 @@ outputs:
   container_name:
     description: Normalized container name used for the startup check.
     value: ${{ steps.prepare.outputs.container_name }}
+  trivy_send_mail:
+    description: Whether the consolidated Trivy report needs an email.
+    value: ${{ steps.trivy_report.outputs.send_mail }}
+  trivy_mail_subject:
+    description: Subject for deferred Trivy mail.
+    value: ${{ steps.trivy_report.outputs.subject }}
+  trivy_mail_receivers:
+    description: Recipients for deferred Trivy mail.
+    value: ${{ steps.trivy_report.outputs.mail_receivers }}
+  trivy_mail_artifact:
+    description: Artifact name for deferred Trivy mail.
+    value: ${{ steps.trivy_report.outputs.artifact_name }}
 
 runs:
   using: composite
@@ -300,6 +316,7 @@ runs:
         report_mode: collect
 
     - name: Report Trivy scan results
+      id: trivy_report
       if: >-
         always() &&
         steps.build_plan.outputs.should_build == 'true' &&
@@ -311,6 +328,7 @@ runs:
         mail_username: ${{ inputs.mail_username }}
         mail_password: ${{ inputs.mail_password }}
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
+        mail_mode: ${{ inputs.trivy_mail_mode }}
 
     - name: Run application container
       if: >-

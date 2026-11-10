@@ -6,6 +6,10 @@ inputs:
     description: Directory containing collected scan folders; defaults to this run's runner temp directory.
     required: false
     default: ""
+  mail_mode:
+    description: Send immediately for legacy callers, or defer until a downstream job has the completed Summary available.
+    required: false
+    default: immediate
   mail_username:
     description: SMTP sender address.
     required: true
@@ -38,6 +42,18 @@ outputs:
   gate_failed:
     description: Whether a scan failed or non-ignored findings were found.
     value: ${{ steps.aggregate.outputs.gate_failed }}
+  send_mail:
+    description: Whether findings or scan failures require an email.
+    value: ${{ steps.aggregate.outputs.send_mail }}
+  mail_receivers:
+    description: Deduplicated recipients, including IT when secrets are present.
+    value: ${{ steps.aggregate.outputs.mail_receivers }}
+  subject:
+    description: Consolidated mail subject.
+    value: ${{ steps.aggregate.outputs.subject }}
+  artifact_name:
+    description: Mail payload artifact name for deferred delivery.
+    value: ${{ steps.aggregate.outputs.artifact_name }}
 
 runs:
   using: composite
@@ -53,8 +69,18 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: node "$ACTION_PATH/aggregate.js"
 
+    - name: Save mail for downstream job
+      if: steps.aggregate.outputs.send_mail == 'true' && inputs.mail_mode == 'deferred'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.aggregate.outputs.artifact_name }}
+        path: |
+          trivy-aggregate-mail.txt
+          trivy-aggregate-mail.html
+        if-no-files-found: error
+
     - name: Mail consolidated report
-      if: steps.aggregate.outputs.send_mail == 'true'
+      if: steps.aggregate.outputs.send_mail == 'true' && inputs.mail_mode != 'deferred'
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: ${{ inputs.smtp_server }}
@@ -66,6 +92,7 @@ runs:
         to: ${{ steps.aggregate.outputs.mail_receivers }}
         from: Security Bot <${{ inputs.mail_username }}>
         body: file://trivy-aggregate-mail.txt
+        html_body: file://trivy-aggregate-mail.html
 
     - name: Evaluate consolidated result
       if: always()

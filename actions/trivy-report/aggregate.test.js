@@ -38,6 +38,7 @@ function run(scans) {
     values,
     summary: fs.readFileSync(summary, 'utf8'),
     mail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.txt'), 'utf8'),
+    htmlMail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.html'), 'utf8'),
   };
   fs.rmSync(root, { recursive: true, force: true });
   return data;
@@ -60,6 +61,9 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.match(data.summary, /CVE-2026-1/);
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
+  assert.match(data.htmlMail, /<strong>3 scans/);
+  assert.match(data.htmlMail, /OPEN FULL GITHUB SUMMARY/);
+  assert.doesNotMatch(data.htmlMail, /secret-rule/);
 });
 
 test('findings block only scans without ignore_finding', () => {
@@ -78,6 +82,7 @@ test('scan errors remain blocking even when ignore_finding is true', () => {
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.summary, /Scan failed/);
+  assert.match(data.htmlMail, /SCAN FAILED/);
 });
 
 test('missing results do not produce a clean report', () => {
