@@ -57,19 +57,23 @@ inputs:
     required: false
     default: "false"
   mail_username:
-    description: SMTP username used by the consolidated Trivy report.
+    description: SMTP username used by the one Trivy report.
     required: false
     default: ""
   mail_password:
-    description: SMTP password used by the consolidated Trivy report.
+    description: SMTP password used by the one Trivy report.
     required: false
     default: ""
   default_mail_recipients:
     description: Additional comma-separated vulnerability report recipients.
     required: false
     default: ""
+  trivy_mail_after_job:
+    description: Set to true to let a downstream job send the Trivy email after this build job finishes.
+    required: false
+    default: "false"
   trivy_mail_mode:
-    description: Use deferred with a downstream notify job so the Summary exists before mail is sent.
+    description: Legacy input. immediate sends now; deferred saves mail for a downstream job. Use trivy_mail_after_job for new workflows.
     required: false
     default: immediate
 
@@ -102,10 +106,10 @@ outputs:
     description: Normalized container name used for the startup check.
     value: ${{ steps.prepare.outputs.container_name }}
   trivy_send_mail:
-    description: Whether the consolidated Trivy report needs an email.
+    description: Whether the one Trivy report needs an email.
     value: ${{ steps.trivy_report.outputs.send_mail }}
   trivy_mail_artifact:
-    description: Artifact name for deferred Trivy mail.
+    description: Artifact name for Trivy mail sent after the build job.
     value: ${{ steps.trivy_report.outputs.artifact_name }}
 
 runs:
@@ -287,7 +291,7 @@ runs:
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
         job_id: ${{ job.check_run_id }}
-        report_mode: collect
+        merge_report: 'true'
 
     - name: Scan Docker image using Trivy
       id: scan_image
@@ -307,7 +311,7 @@ runs:
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
         job_id: ${{ job.check_run_id }}
-        report_mode: collect
+        merge_report: 'true'
 
     - name: Report Trivy scan results
       id: trivy_report
@@ -322,6 +326,7 @@ runs:
         mail_username: ${{ inputs.mail_username }}
         mail_password: ${{ inputs.mail_password }}
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
+        mail_after_job: ${{ inputs.trivy_mail_after_job }}
         mail_mode: ${{ inputs.trivy_mail_mode }}
 
     - name: Run application container

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { aggregate } = require('./aggregate');
+const { generateReport } = require('./generate-report');
 
 function run(scans) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trivy-report-test-'));
@@ -17,7 +17,7 @@ function run(scans) {
   }
   const output = path.join(root, 'output');
   const summary = path.join(root, 'summary');
-  aggregate({
+  generateReport({
       ...process.env,
       REPORT_DIR: reportDir,
       GITHUB_OUTPUT: output,
@@ -29,7 +29,7 @@ function run(scans) {
       MAIL_RECEIVERS: 'author@example.com,author@example.com',
       MAIL_USERNAME: 'sender@example.com',
       IT_TEAM_EMAIL: 'it@example.com',
-    }, path.join(root, 'trivy-aggregate-mail.txt'));
+    }, root);
   const values = Object.fromEntries(fs.readFileSync(output, 'utf8').trim().split('\n').map((line) => {
     const index = line.indexOf('=');
     return [line.slice(0, index), line.slice(index + 1)];
@@ -37,9 +37,9 @@ function run(scans) {
   const data = {
     values,
     summary: fs.readFileSync(summary, 'utf8'),
-    mail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.txt'), 'utf8'),
-    htmlMail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.html'), 'utf8'),
-    mailMetadata: JSON.parse(fs.readFileSync(path.join(root, 'trivy-aggregate-mail.json'), 'utf8')),
+    mail: fs.readFileSync(path.join(root, 'trivy-mail.txt'), 'utf8'),
+    htmlMail: fs.readFileSync(path.join(root, 'trivy-mail.html'), 'utf8'),
+    mailMetadata: JSON.parse(fs.readFileSync(path.join(root, 'trivy-mail-details.json'), 'utf8')),
   };
   fs.rmSync(root, { recursive: true, force: true });
   return data;

@@ -1,26 +1,29 @@
-# Consolidated Trivy report
+# One Trivy report for all scans
 
-`run_trivy_scan_dockerfile` and `run_trivy_scan_image` accept `report_mode: collect`.
-In this mode, each call saves a uniquely named result under
+`run_trivy_scan_dockerfile` and `run_trivy_scan_image` report each scan on its
+own by default. Set `merge_report: 'true'` on every scan to save results for
+one report instead.
+Each scan saves a uniquely named result under
 `$RUNNER_TEMP/trivy-collect/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` and does not
-send mail, write a job summary, or fail on findings. The legacy `individual`
-mode remains the default while existing workflows migrate.
+send mail, write a job summary, or fail on findings in this mode.
 
 Call `trivy-report` once after the last scan. It writes one job summary and prepares
 one email when findings or scan errors exist. It preserves each scan's
 `ignore_finding` setting: ignored findings appear in the report but do not fail
 the job. Scan errors always fail the job. Put this step before publishing an image.
 
-GitHub displays the Summary only after the scan job finishes. Use
-`mail_mode: deferred` and a downstream notify job to ensure the link is ready
-when the email arrives. The default `immediate` mode preserves existing callers.
+GitHub displays the Summary only after the scan job finishes. Set
+`mail_after_job: 'true'` on `trivy-report` and add a downstream `trivy-mail`
+job so the link is ready when the email arrives. By default, `trivy-report`
+sends mail in the same job. The older `report_mode` (`individual`/`collect`)
+and `mail_mode` (`immediate`/`deferred`) inputs still work.
 
 ```yaml
 - name: Scan Dockerfile
   uses: svtechnmaa/.github/actions/run_trivy_scan_dockerfile@main
   with:
     dockerfile_path: ./Dockerfile
-    report_mode: collect
+    merge_report: 'true'
     ignore_finding: 'true'
     # Other existing inputs...
 
@@ -29,7 +32,7 @@ when the email arrives. The default `immediate` mode preserves existing callers.
   with:
     image_name: my-app
     image_tag: latest
-    report_mode: collect
+    merge_report: 'true'
     ignore_finding: 'true'
     # Other existing inputs...
 
@@ -42,7 +45,7 @@ when the email arrives. The default `immediate` mode preserves existing callers.
     mail_password: ${{ secrets.MAIL_PASSWORD }}
     mail_receivers: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
     it_team_email: ${{ vars.IT_TEAM_EMAIL }}
-    mail_mode: deferred
+    mail_after_job: 'true'
 ```
 
 Expose only `steps.trivy_report.outputs.send_mail` and `artifact_name` as
@@ -72,10 +75,14 @@ jobs:
           mail_password: ${{ secrets.MAIL_PASSWORD }}
 ```
 
+The artifact contains `trivy-mail.html` (formatted email), `trivy-mail.txt`
+(plain-text email), and `trivy-mail-details.json` (subject and recipients).
+The GitHub Summary is written separately to `GITHUB_STEP_SUMMARY`.
+
 For scans in separate jobs, upload the collection directory once at the end
 of each scan job with a distinct artifact name (for example,
 `trivy-results-${{ github.job }}`). In a final job with `needs` on every scan job
 and `if: always()`, download the artifacts with `merge-multiple: true` into a
 single directory, then pass that directory as `report_dir` to `trivy-report`
-with `mail_mode: deferred`. A downstream notify job sends the single email
-after the aggregation job finishes and its Summary is available.
+with `mail_after_job: 'true'`. A downstream notify job sends the single email
+after the report job finishes and its Summary is available.

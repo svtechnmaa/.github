@@ -1,9 +1,9 @@
-name: Send Consolidated Trivy Mail
-description: Send the collected Trivy mail after the scan job finishes and its GitHub Summary is available.
+name: Send Trivy Report Email
+description: Send one Trivy report email after the scan job finishes and its GitHub Summary is available.
 
 inputs:
   artifact_name:
-    description: Artifact name produced by trivy-report in deferred mode.
+    description: Artifact name produced by trivy-report when mail_after_job is true.
     required: true
   mail_username:
     description: SMTP sender address.
@@ -23,22 +23,22 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Download consolidated mail
+    - name: Download Trivy mail files
       uses: actions/download-artifact@v7
       with:
         name: ${{ inputs.artifact_name }}
         path: .
 
-    - name: Read mail metadata
-      id: metadata
+    - name: Read mail details
+      id: mail_details
       shell: bash
       run: |
-        jq -e '.subject | type == "string" and length > 0' trivy-aggregate-mail.json > /dev/null
-        jq -e '.mail_receivers | type == "string" and length > 0' trivy-aggregate-mail.json > /dev/null
-        echo "subject=$(jq -r '.subject' trivy-aggregate-mail.json)" >> "$GITHUB_OUTPUT"
-        echo "mail_receivers=$(jq -r '.mail_receivers' trivy-aggregate-mail.json)" >> "$GITHUB_OUTPUT"
+        jq -e '.subject | type == "string" and length > 0' trivy-mail-details.json > /dev/null
+        jq -e '.mail_receivers | type == "string" and length > 0' trivy-mail-details.json > /dev/null
+        echo "subject=$(jq -r '.subject' trivy-mail-details.json)" >> "$GITHUB_OUTPUT"
+        echo "mail_receivers=$(jq -r '.mail_receivers' trivy-mail-details.json)" >> "$GITHUB_OUTPUT"
 
-    - name: Mail consolidated report
+    - name: Send Trivy report mail
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: ${{ inputs.smtp_server }}
@@ -46,8 +46,8 @@ runs:
         secure: true
         username: ${{ inputs.mail_username }}
         password: ${{ inputs.mail_password }}
-        subject: ${{ steps.metadata.outputs.subject || '[TRIVY] Consolidated scan report' }}
-        to: ${{ steps.metadata.outputs.mail_receivers }}
+        subject: ${{ steps.mail_details.outputs.subject || '[TRIVY] Scan report' }}
+        to: ${{ steps.mail_details.outputs.mail_receivers }}
         from: Security Bot <${{ inputs.mail_username }}>
-        body: file://trivy-aggregate-mail.txt
-        html_body: file://trivy-aggregate-mail.html
+        body: file://trivy-mail.txt
+        html_body: file://trivy-mail.html

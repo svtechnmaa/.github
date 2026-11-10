@@ -45,7 +45,10 @@ function findingLink(label, url) {
   return `[${markdown(label)}](${safeUrl.replace(/\)/g, '%29')})`;
 }
 
-function aggregate(env = process.env, mailPath = 'trivy-aggregate-mail.txt') {
+function generateReport(env = process.env, mailDir = '.') {
+const mailTextPath = path.join(mailDir, 'trivy-mail.txt');
+const mailHtmlPath = path.join(mailDir, 'trivy-mail.html');
+const mailDetailsPath = path.join(mailDir, 'trivy-mail-details.json');
 const runId = env.GITHUB_RUN_ID || 'local';
 const runAttempt = env.GITHUB_RUN_ATTEMPT || '1';
 const reportDir = env.REPORT_DIR || path.join(env.RUNNER_TEMP || '.', 'trivy-collect', `${runId}-${runAttempt}`);
@@ -187,7 +190,7 @@ const body = [
   'Open the workflow run Summary for CVEs, affected packages, fixed versions, files, and remediation details.',
   'Secret values are never included in this email.',
 ];
-fs.writeFileSync(mailPath, `${body.join('\n')}\n`);
+fs.writeFileSync(mailTextPath, `${body.join('\n')}\n`);
 
 const accent = totals.failures ? '#b42318' : gateFailed ? '#c2410c' : totalFindings ? '#9a6700' : '#1a7f37';
 const cards = [
@@ -211,7 +214,7 @@ ${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>N
 <p style="margin-top:28px"><a href="${html(runUrl)}" style="display:inline-block;padding:12px 18px;background:#0969da;color:#fff;text-decoration:none;font-weight:700;border-radius:6px">OPEN FULL GITHUB SUMMARY</a></p>
 <p style="font-size:13px;color:#57606a">The Summary includes CVEs, affected packages, fixed versions, files, and remediation details. Secret values are not included in this email.</p>
 </body></html>`;
-fs.writeFileSync(mailPath.replace(/\.txt$/, '.html'), htmlBody);
+fs.writeFileSync(mailHtmlPath, htmlBody);
 
 const recipients = [env.MAIL_RECEIVERS || '', totals.secrets ? env.IT_TEAM_EMAIL || '' : '']
   .join(',').split(',').map((value) => value.trim())
@@ -227,7 +230,7 @@ const outputs = {
   subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,
   artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
 };
-fs.writeFileSync(mailPath.replace(/\.txt$/, '.json'), JSON.stringify({
+fs.writeFileSync(mailDetailsPath, JSON.stringify({
   subject: outputs.subject,
   mail_receivers: outputs.mail_receivers,
 }, null, 2));
@@ -235,5 +238,5 @@ for (const [key, value] of Object.entries(outputs)) fs.appendFileSync(env.GITHUB
 return outputs;
 }
 
-if (require.main === module) aggregate();
-module.exports = { aggregate };
+if (require.main === module) generateReport();
+module.exports = { generateReport };

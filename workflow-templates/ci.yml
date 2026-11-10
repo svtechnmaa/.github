@@ -66,7 +66,7 @@ jobs:
           mail_username: ${{ vars.MAIL_USERNAME }}
           mail_password: ${{ secrets.MAIL_PASSWORD }}
           default_mail_recipients: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
-          trivy_mail_mode: deferred
+          trivy_mail_after_job: 'true'
       - name: Resolve built image reference
         id: resolve_build_image
         shell: bash

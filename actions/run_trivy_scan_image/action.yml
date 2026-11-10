@@ -17,8 +17,12 @@ inputs:
     description: "Fail the job on HIGH/CRITICAL image vulnerabilities or secrets by default. Set to true to allow the job to pass"
     required: false
     default: "false"
+  merge_report:
+    description: "Set to true to add this scan to one report created after all scans. False keeps this scan's own Summary and email."
+    required: false
+    default: "false"
   report_mode:
-    description: "Set to collect to defer summary, email, and finding gate to the trivy-report action"
+    description: "Legacy input. individual reports this scan alone; collect adds it to one report. Use merge_report for new workflows."
     required: false
     default: individual
   mail_username:
@@ -119,7 +123,7 @@ runs:
         echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
 
     - name: Collect image scan result
-      if: always() && inputs.report_mode == 'collect'
+      if: always() && (inputs.merge_report == 'true' || inputs.report_mode == 'collect')
       shell: bash
       env:
         SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
@@ -138,7 +142,7 @@ runs:
           '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
 
     - name: Write summary
-      if: always() && inputs.report_mode != 'collect'
+      if: always() && inputs.merge_report != 'true' && inputs.report_mode != 'collect'
       shell: bash
       env:
         REPORT_IMAGE_REF: ${{ inputs.image_name }}:${{ inputs.image_tag }}
@@ -229,7 +233,7 @@ runs:
         fi
 
     - name: Determine scan report URL
-      if: inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
+      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
       shell: bash
       env:
         REPORT_JOB_ID: ${{ inputs.job_id }}
@@ -238,7 +242,7 @@ runs:
       continue-on-error: true
 
     - name: Clean noreply mail receivers
-      if: inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
+      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
       shell: bash
       env:
         RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
@@ -254,7 +258,7 @@ runs:
       continue-on-error: true
 
     - name: Build image mail report
-      if: inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
+      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
       shell: bash
       env:
         REPORT_IMAGE_REF: ${{ inputs.image_name }}:${{ inputs.image_tag }}
@@ -302,7 +306,7 @@ runs:
       continue-on-error: true
 
     - name: Send mail if image findings detected
-      if: inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
+      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.parse_findings.outputs.detected_findings == 'true'
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: smtp.gmail.com
@@ -317,7 +321,7 @@ runs:
       continue-on-error: true
 
     - name: Evaluate result
-      if: always() && inputs.report_mode != 'collect'
+      if: always() && inputs.merge_report != 'true' && inputs.report_mode != 'collect'
       shell: bash
       env:
         IGNORE_FINDING: ${{ inputs.ignore_finding }}
