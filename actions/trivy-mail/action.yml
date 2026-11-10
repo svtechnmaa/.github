@@ -33,6 +33,11 @@ runs:
       id: mail_details
       shell: bash
       run: |
+        if [ ! -f trivy-mail-details.json ] && [ -f trivy-aggregate-mail.json ]; then
+          cp trivy-aggregate-mail.json trivy-mail-details.json
+          cp trivy-aggregate-mail.txt trivy-mail.txt
+          cp trivy-aggregate-mail.html trivy-mail.html
+        fi
         jq -e '.subject | type == "string" and length > 0' trivy-mail-details.json > /dev/null
         jq -e '.mail_receivers | type == "string" and length > 0' trivy-mail-details.json > /dev/null
         echo "subject=$(jq -r '.subject' trivy-mail-details.json)" >> "$GITHUB_OUTPUT"
