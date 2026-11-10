@@ -104,12 +104,6 @@ outputs:
   trivy_send_mail:
     description: Whether the consolidated Trivy report needs an email.
     value: ${{ steps.trivy_report.outputs.send_mail }}
-  trivy_mail_subject:
-    description: Subject for deferred Trivy mail.
-    value: ${{ steps.trivy_report.outputs.subject }}
-  trivy_mail_receivers:
-    description: Recipients for deferred Trivy mail.
-    value: ${{ steps.trivy_report.outputs.mail_receivers }}
   trivy_mail_artifact:
     description: Artifact name for deferred Trivy mail.
     value: ${{ steps.trivy_report.outputs.artifact_name }}

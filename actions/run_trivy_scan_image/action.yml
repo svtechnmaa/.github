@@ -123,6 +123,8 @@ runs:
       shell: bash
       env:
         SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+        SCAN_COMMIT: ${{ inputs.commit_id }}
+        SCAN_AUTHOR: ${{ inputs.commit_author_name }}
         IGNORE_FINDING: ${{ inputs.ignore_finding }}
         SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
         PARSE_OK: ${{ steps.parse_findings.outputs.scan_ok }}
@@ -132,8 +134,8 @@ runs:
         scan_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
         if [ -f trivy-image-report.json ]; then cp trivy-image-report.json "$scan_dir/report.json"; fi
         if [ "$PARSE_OK" = "true" ] && [ "$SCAN_OUTCOME" = "success" ]; then scan_ok=true; else scan_ok=false; fi
-        jq -n --arg kind image --arg target "$SCAN_TARGET" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
+        jq -n --arg kind image --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
 
     - name: Write summary
       if: always() && inputs.report_mode != 'collect'

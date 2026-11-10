@@ -77,6 +77,7 @@ runs:
         path: |
           trivy-aggregate-mail.txt
           trivy-aggregate-mail.html
+          trivy-aggregate-mail.json
         if-no-files-found: error
 
     - name: Mail consolidated report

@@ -26,14 +26,23 @@ function html(value) {
   })[character]);
 }
 
-function table(items, columns) {
-  if (!items.length) return '';
+function markdownTable(headers, rows) {
   return [
-    `| ${columns.map(([label]) => label).join(' | ')} |`,
-    `| ${columns.map(() => '---').join(' | ')} |`,
-    ...items.map((item) => `| ${columns.map(([, field]) => clean(item[field])).join(' | ')} |`),
+    `| ${headers.join(' | ')} |`,
+    `| ${headers.map(() => '---').join(' | ')} |`,
+    ...rows.map((row) => `| ${row.join(' | ')} |`),
     '',
   ].join('\n');
+}
+
+function markdown(value) {
+  return clean(value).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function findingLink(label, url) {
+  const safeUrl = String(url || '');
+  if (!/^https?:\/\/[^\s]+$/.test(safeUrl)) return markdown(label);
+  return `[${markdown(label)}](${safeUrl.replace(/\)/g, '%29')})`;
 }
 
 function aggregate(env = process.env, mailPath = 'trivy-aggregate-mail.txt') {
@@ -56,6 +65,8 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
   return {
     kind: meta.kind || 'unknown',
     target: meta.target || 'unknown',
+    commitId: meta.commit_id || '',
+    commitAuthor: meta.commit_author || '',
     ignoreFinding: meta.ignore_finding === true,
     scanOk: meta.scan_ok === true && report !== null && Array.isArray(report.Results),
     vulnerabilities, secrets, misconfigurations,
@@ -73,51 +84,87 @@ const totalFindings = totals.vulnerabilities + totals.secrets + totals.misconfig
 const gateFailed = totals.failures > 0 || scans.some((scan) =>
   !scan.ignoreFinding && scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0
 );
-const status = totals.failures ? 'Scan failed' : totalFindings ? 'Findings found' : 'Clean';
+const status = totals.failures ? '⚠️ Scan failed' : totalFindings ? '❌ Issues found' : '✅ Clean';
 const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS ALLOWED' : 'CLEAN';
 const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
 const cleanScans = scans.length - highlightedScans.length;
+const commitIds = [...new Set(scans.map((scan) => scan.commitId).filter((value) => /^[0-9a-f]{7,40}$/i.test(value)))];
+const commitId = commitIds.length === 1 ? commitIds[0] : '';
+const commitAuthor = [...new Set(scans.map((scan) => scan.commitAuthor).filter(Boolean))].join(', ');
+const commitUrl = `${env.GITHUB_SERVER_URL || 'https://github.com'}/${env.GITHUB_REPOSITORY || ''}/commit/${commitId}`;
+const context = [`**Repository:** ${markdown(env.GITHUB_REPOSITORY || '')}`];
+if (commitId) context.push(`**Commit:** [\`${commitId.slice(0, 7)}\`](${commitUrl})`);
+if (commitAuthor) context.push(`**Author:** ${markdown(commitAuthor)}`);
+context.push(`**Run:** [#${runId}](${runUrl})`);
 
 const summary = [
-  `# Trivy report — ${status}`,
+  `# 🔍 Trivy — ${status}`,
   '',
-  `**Run:** ${runUrl}  `,
-  `**Scans:** ${scans.length} · **Vulnerabilities:** ${totals.vulnerabilities} · **Secrets:** ${totals.secrets} · **Misconfigurations:** ${totals.misconfigurations} · **Scan failures:** ${totals.failures}`,
+  context.join(' · '),
   '',
-  '| Scan | Target | Vulnerabilities | Secrets | Misconfigurations | Result |',
-  '| --- | --- | ---: | ---: | ---: | --- |',
-  ...scans.map((scan) => {
+  '## 1. Summary',
+  '',
+  markdownTable(['Category', 'Count', 'Status'], [
+    ['🔑 Secrets (HIGH, CRITICAL)', totals.secrets, totals.secrets ? '❌' : '✅'],
+    ['🛡️ Vulnerabilities (HIGH, CRITICAL)', totals.vulnerabilities, totals.vulnerabilities ? '❌' : '✅'],
+    ['⚙️ Misconfigurations (HIGH, CRITICAL)', totals.misconfigurations, totals.misconfigurations ? '❌' : '✅'],
+    ['⚠️ Scan failures', totals.failures, totals.failures ? '❌' : '✅'],
+  ]),
+  `**Scans:** ${scans.length} · **Clean:** ${cleanScans} · **Total findings:** ${totalFindings}`,
+  '',
+  '## 2. Scanned targets',
+  '',
+  markdownTable(['Type', 'Target', 'Vulnerabilities', 'Secrets', 'Misconfigurations', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-    const result = !scan.scanOk ? 'Scan failed' : count === 0 ? 'Clean' : scan.ignoreFinding ? 'Findings allowed' : 'Blocking findings';
-    return `| ${clean(scan.kind)} | ${clean(scan.target)} | ${scan.vulnerabilities.length} | ${scan.secrets.length} | ${scan.misconfigurations.length} | ${result} |`;
-  }),
-  '',
+    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.ignoreFinding ? '⚠️ Findings allowed (`ignore_finding: true`)' : '❌ Blocking findings';
+    return [markdown(scan.kind), markdown(scan.target), scan.vulnerabilities.length, scan.secrets.length, scan.misconfigurations.length, result];
+  })),
 ];
 if (!scans.length) summary.push('No scan results were collected. Check the scan steps.', '');
 
-for (const scan of scans) {
-  const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-  if (!count) continue;
-  summary.push(`<details><summary>${clean(scan.kind)}: ${clean(scan.target)} — ${count} findings</summary>`, '');
-  if (scan.vulnerabilities.length) {
-    summary.push('### Vulnerabilities', '', table(scan.vulnerabilities,
-      [['Severity', 'Severity'], ['CVE', 'VulnerabilityID'], ['Package', 'PkgName'], ['Installed', 'InstalledVersion'], ['Fixed in', 'FixedVersion'], ['File', 'target']]));
+if (totalFindings > 0) summary.push('## 3. Findings', '');
+const vulnerabilityRows = scans.flatMap((scan) => scan.vulnerabilities.map((finding) => [
+  markdown(scan.target), markdown(finding.Severity), findingLink(finding.VulnerabilityID || 'Unknown', finding.PrimaryURL),
+  markdown(finding.PkgName), markdown(finding.InstalledVersion), markdown(finding.FixedVersion), markdown(finding.target),
+]));
+if (vulnerabilityRows.length) {
+  summary.push(`### 🛡️ Vulnerabilities (${vulnerabilityRows.length})`, '', `<details><summary>View all ${vulnerabilityRows.length} vulnerability finding(s)</summary>`, '',
+    markdownTable(['Scan target', 'Severity', 'CVE', 'Package', 'Installed', 'Fixed in', 'File / layer'], vulnerabilityRows), '</details>', '');
+}
+const misconfigurationRows = scans.flatMap((scan) => scan.misconfigurations.map((finding) => [
+  markdown(scan.target), markdown(finding.Severity), findingLink(finding.ID || 'Unknown', finding.PrimaryURL),
+  markdown(finding.Title), markdown(finding.target), markdown(finding.CauseMetadata?.StartLine), markdown(finding.Resolution),
+]));
+if (misconfigurationRows.length) {
+  summary.push(`### ⚙️ Misconfigurations (${misconfigurationRows.length})`, '', `<details><summary>View all ${misconfigurationRows.length} misconfiguration finding(s)</summary>`, '',
+    markdownTable(['Scan target', 'Severity', 'Rule', 'Title', 'File', 'Line', 'Resolution'], misconfigurationRows), '</details>', '');
+}
+const secretRows = scans.flatMap((scan) => scan.secrets.map((finding) => [
+  markdown(scan.target), markdown(finding.Severity), markdown(finding.RuleID), markdown(finding.Title),
+  markdown(finding.target), markdown(finding.StartLine),
+]));
+if (secretRows.length) {
+  summary.push(`### 🔑 Secrets (${secretRows.length})`, '', `<details><summary>View all ${secretRows.length} secret finding(s)</summary>`, '',
+    markdownTable(['Scan target', 'Severity', 'Rule', 'Title', 'File', 'Line'], secretRows), '</details>', '');
+}
+if (totalFindings > 0 || totals.failures > 0) {
+  summary.push(`## ${totalFindings > 0 ? '4' : '3'}. Next actions`, '');
+  const actions = [];
+  if (totals.failures) actions.push('Fix the failed scan(s) and rerun before relying on this report.');
+  if (totals.secrets) actions.push('Rotate or revoke exposed credentials, remove them from source, and move them to a secret store.');
+  if (totals.vulnerabilities) actions.push('Update affected packages to the **Fixed in** version or rebuild from a patched base image.');
+  if (totals.misconfigurations) actions.push('Apply the reported **Resolution** to the affected file and line.');
+  summary.push(...actions.map((action, index) => `${index + 1}. ${action}`), '');
+  if (scans.some((scan) => scan.ignoreFinding && (scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0))) {
+    summary.push('**Note:** Findings from scans with `ignore_finding: true` are reported but do not fail the job.', '');
   }
-  if (scan.secrets.length) {
-    summary.push('### Secrets', '', table(scan.secrets,
-      [['Severity', 'Severity'], ['Rule', 'RuleID'], ['Title', 'Title'], ['File', 'target'], ['Line', 'StartLine']]));
-  }
-  if (scan.misconfigurations.length) {
-    summary.push('### Misconfigurations', '', table(scan.misconfigurations,
-      [['Severity', 'Severity'], ['Rule', 'ID'], ['Title', 'Title'], ['File', 'target'], ['Resolution', 'Resolution']]));
-  }
-  summary.push('</details>', '');
 }
 fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary.join('\n')}\n`);
 
 const body = [
   `TRIVY SCAN — ${mailStatus}`,
   `REPOSITORY: ${env.GITHUB_REPOSITORY || ''}`,
+  ...(commitId ? [`COMMIT: ${commitUrl}`] : []),
   `FULL REPORT: ${runUrl}`,
   '',
   'FINDINGS SUMMARY',
@@ -151,7 +198,7 @@ const rows = highlightedScans.map((scan) => {
   return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.vulnerabilities.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
 }).join('');
 const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
-<div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div></div>
+<div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>
 <h2 style="font-size:17px;margin-top:28px">FINDINGS SUMMARY</h2><p><strong>${scans.length} scans</strong> completed or attempted · <strong>${cleanScans} clean</strong></p>
 <table style="border-collapse:collapse;width:100%"><tr>${cards}</tr></table>
 <h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
@@ -175,6 +222,10 @@ const outputs = {
   subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,
   artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
 };
+fs.writeFileSync(mailPath.replace(/\.txt$/, '.json'), JSON.stringify({
+  subject: outputs.subject,
+  mail_receivers: outputs.mail_receivers,
+}, null, 2));
 for (const [key, value] of Object.entries(outputs)) fs.appendFileSync(env.GITHUB_OUTPUT, `${key}=${value}\n`);
 return outputs;
 }

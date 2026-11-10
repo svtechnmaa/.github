@@ -39,18 +39,19 @@ function run(scans) {
     summary: fs.readFileSync(summary, 'utf8'),
     mail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.txt'), 'utf8'),
     htmlMail: fs.readFileSync(path.join(root, 'trivy-aggregate-mail.html'), 'utf8'),
+    mailMetadata: JSON.parse(fs.readFileSync(path.join(root, 'trivy-aggregate-mail.json'), 'utf8')),
   };
   fs.rmSync(root, { recursive: true, force: true });
   return data;
 }
 
-const vulnerability = { VulnerabilityID: 'CVE-2026-1', Severity: 'HIGH', PkgName: 'pkg', FixedVersion: '2.0' };
+const vulnerability = { VulnerabilityID: 'CVE-2026-1', PrimaryURL: 'https://example.com/CVE-2026-1', Severity: 'HIGH', PkgName: 'pkg', FixedVersion: '2.0' };
 const secret = { RuleID: 'secret-rule', Severity: 'HIGH', Title: 'Credential', StartLine: 4 };
 
 test('combines repeated scans, reports ignored findings, and sends one email to IT for secrets', () => {
   const data = run([
-    { meta: { kind: 'dockerfile', target: './Dockerfile', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'image', target: 'app:first', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'app:first', Secrets: [secret] }] } },
+    { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'app:first', Secrets: [secret] }] } },
     { meta: { kind: 'image', target: 'app:second', ignore_finding: true, scan_ok: true }, report: { Results: [] } },
   ]);
   assert.equal(data.values.scan_count, '3');
@@ -58,7 +59,17 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
   assert.equal(data.values.mail_receivers, 'author@example.com,it@example.com');
-  assert.match(data.summary, /CVE-2026-1/);
+  assert.deepEqual(data.mailMetadata, {
+    subject: data.values.subject,
+    mail_receivers: data.values.mail_receivers,
+  });
+  assert.match(data.summary, /## 1\. Summary/);
+  assert.match(data.summary, /Commit:\*\* \[`1234567`\]\(https:\/\/github\.com\/svtechnmaa\/svtech_report\/commit\/123456789abcdef\)/);
+  assert.match(data.summary, /## 2\. Scanned targets/);
+  assert.match(data.summary, /## 3\. Findings/);
+  assert.match(data.summary, /\[CVE-2026-1\]\(https:\/\/example\.com\/CVE-2026-1\)/);
+  assert.match(data.summary, /Fixed in/);
+  assert.match(data.summary, /ignore_finding: true/);
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);

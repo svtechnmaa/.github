@@ -45,16 +45,15 @@ when the email arrives. The default `immediate` mode preserves existing callers.
     mail_mode: deferred
 ```
 
-Expose `steps.trivy_report.outputs.send_mail`, `subject`, `mail_receivers`, and
-`artifact_name` as scan job outputs. Then add a downstream notify job:
+Expose only `steps.trivy_report.outputs.send_mail` and `artifact_name` as
+scan job outputs. The notify job reads the subject and recipients from the
+mail artifact after download. Then add a downstream notify job:
 
 ```yaml
 jobs:
   scan:
     outputs:
       trivy_send_mail: ${{ steps.trivy_report.outputs.send_mail }}
-      trivy_mail_subject: ${{ steps.trivy_report.outputs.subject }}
-      trivy_mail_receivers: ${{ steps.trivy_report.outputs.mail_receivers }}
       trivy_mail_artifact: ${{ steps.trivy_report.outputs.artifact_name }}
     # Runner and scan steps from above...
 
@@ -69,8 +68,6 @@ jobs:
         uses: svtechnmaa/.github/actions/trivy-mail@main
         with:
           artifact_name: ${{ needs.scan.outputs.trivy_mail_artifact }}
-          subject: ${{ needs.scan.outputs.trivy_mail_subject }}
-          mail_receivers: ${{ needs.scan.outputs.trivy_mail_receivers }}
           mail_username: ${{ vars.MAIL_USERNAME }}
           mail_password: ${{ secrets.MAIL_PASSWORD }}
 ```

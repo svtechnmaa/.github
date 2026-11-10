@@ -5,12 +5,6 @@ inputs:
   artifact_name:
     description: Artifact name produced by trivy-report in deferred mode.
     required: true
-  subject:
-    description: Subject produced by trivy-report.
-    required: true
-  mail_receivers:
-    description: Recipients produced by trivy-report.
-    required: true
   mail_username:
     description: SMTP sender address.
     required: true
@@ -35,6 +29,15 @@ runs:
         name: ${{ inputs.artifact_name }}
         path: .
 
+    - name: Read mail metadata
+      id: metadata
+      shell: bash
+      run: |
+        jq -e '.subject | type == "string" and length > 0' trivy-aggregate-mail.json > /dev/null
+        jq -e '.mail_receivers | type == "string" and length > 0' trivy-aggregate-mail.json > /dev/null
+        echo "subject=$(jq -r '.subject' trivy-aggregate-mail.json)" >> "$GITHUB_OUTPUT"
+        echo "mail_receivers=$(jq -r '.mail_receivers' trivy-aggregate-mail.json)" >> "$GITHUB_OUTPUT"
+
     - name: Mail consolidated report
       uses: dawidd6/action-send-mail@v16
       with:
@@ -43,8 +46,8 @@ runs:
         secure: true
         username: ${{ inputs.mail_username }}
         password: ${{ inputs.mail_password }}
-        subject: ${{ inputs.subject }}
-        to: ${{ inputs.mail_receivers }}
+        subject: ${{ steps.metadata.outputs.subject || '[TRIVY] Consolidated scan report' }}
+        to: ${{ steps.metadata.outputs.mail_receivers }}
         from: Security Bot <${{ inputs.mail_username }}>
         body: file://trivy-aggregate-mail.txt
         html_body: file://trivy-aggregate-mail.html

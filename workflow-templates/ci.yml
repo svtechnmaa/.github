@@ -49,8 +49,6 @@ jobs:
       image_name: ${{ steps.resolve_build_image.outputs.image_name }}
       container_name: ${{ steps.resolve_build_image.outputs.container_name }}
       trivy_send_mail: ${{ steps.build.outputs.trivy_send_mail }}
-      trivy_mail_subject: ${{ steps.build.outputs.trivy_mail_subject }}
-      trivy_mail_receivers: ${{ steps.build.outputs.trivy_mail_receivers }}
       trivy_mail_artifact: ${{ steps.build.outputs.trivy_mail_artifact }}
     steps:
       - name: Build, scan, and publish image
@@ -95,8 +93,6 @@ jobs:
         uses: svtechnmaa/.github/actions/trivy-mail@main
         with:
           artifact_name: ${{ needs.build.outputs.trivy_mail_artifact }}
-          subject: ${{ needs.build.outputs.trivy_mail_subject }}
-          mail_receivers: ${{ needs.build.outputs.trivy_mail_receivers }}
           mail_username: ${{ vars.MAIL_USERNAME }}
           mail_password: ${{ secrets.MAIL_PASSWORD }}
 
