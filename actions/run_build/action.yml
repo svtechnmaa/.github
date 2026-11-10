@@ -57,11 +57,11 @@ inputs:
     required: false
     default: "false"
   mail_username:
-    description: SMTP username used by the shared Trivy scan actions.
+    description: SMTP username used by the consolidated Trivy report.
     required: false
     default: ""
   mail_password:
-    description: SMTP password used by the shared Trivy scan actions.
+    description: SMTP password used by the consolidated Trivy report.
     required: false
     default: ""
   default_mail_recipients:
@@ -262,6 +262,7 @@ runs:
           --file "${DOCKERFILE_PATH}" --tag "${IMAGE_NAME}:latest" --tag "${IMAGE_NAME}:${COMMIT_SHORT_ID}" "${BUILD_CONTEXT}"
 
     - name: Scan Dockerfile using Trivy
+      id: scan_dockerfile
       if: >-
         steps.build_plan.outputs.should_build == 'true' &&
         inputs.enable_scans == 'true' &&
@@ -276,8 +277,10 @@ runs:
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
         job_id: ${{ job.check_run_id }}
+        report_mode: collect
 
     - name: Scan Docker image using Trivy
+      id: scan_image
       if: >-
         steps.build_plan.outputs.should_build == 'true' &&
         inputs.enable_scans == 'true' &&
@@ -294,6 +297,20 @@ runs:
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
         job_id: ${{ job.check_run_id }}
+        report_mode: collect
+
+    - name: Report Trivy scan results
+      if: >-
+        always() &&
+        steps.build_plan.outputs.should_build == 'true' &&
+        inputs.enable_scans == 'true' &&
+        steps.check_commit_message.outputs.no_scan != 'true' &&
+        (steps.scan_dockerfile.outcome != 'skipped' || steps.scan_image.outcome != 'skipped')
+      uses: svtechnmaa/.github/actions/trivy-report@main
+      with:
+        mail_username: ${{ inputs.mail_username }}
+        mail_password: ${{ inputs.mail_password }}
+        mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
 
     - name: Run application container
       if: >-

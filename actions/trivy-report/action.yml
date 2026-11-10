@@ -1,0 +1,79 @@
+name: Consolidated Trivy Report
+description: Combine collected Dockerfile and image scans into one summary, one email, and one finding gate.
+
+inputs:
+  report_dir:
+    description: Directory containing collected scan folders; defaults to this run's runner temp directory.
+    required: false
+    default: ""
+  mail_username:
+    description: SMTP sender address.
+    required: true
+  mail_password:
+    description: SMTP password.
+    required: true
+  mail_receivers:
+    description: Comma-separated report recipients.
+    required: true
+  it_team_email:
+    description: Recipient added to the same report email when secrets are found.
+    required: false
+    default: ""
+  smtp_server:
+    description: SMTP server.
+    required: false
+    default: smtp.gmail.com
+  smtp_port:
+    description: SMTP port.
+    required: false
+    default: "465"
+
+outputs:
+  finding_count:
+    description: Total findings across all collected scans.
+    value: ${{ steps.aggregate.outputs.finding_count }}
+  scan_count:
+    description: Number of collected scans.
+    value: ${{ steps.aggregate.outputs.scan_count }}
+  gate_failed:
+    description: Whether a scan failed or non-ignored findings were found.
+    value: ${{ steps.aggregate.outputs.gate_failed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build consolidated report
+      id: aggregate
+      shell: bash
+      env:
+        REPORT_DIR: ${{ inputs.report_dir }}
+        MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
+        MAIL_USERNAME: ${{ inputs.mail_username }}
+        IT_TEAM_EMAIL: ${{ inputs.it_team_email }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: node "$ACTION_PATH/aggregate.js"
+
+    - name: Mail consolidated report
+      if: steps.aggregate.outputs.send_mail == 'true'
+      uses: dawidd6/action-send-mail@v16
+      with:
+        server_address: ${{ inputs.smtp_server }}
+        server_port: ${{ inputs.smtp_port }}
+        secure: true
+        username: ${{ inputs.mail_username }}
+        password: ${{ inputs.mail_password }}
+        subject: ${{ steps.aggregate.outputs.subject }}
+        to: ${{ steps.aggregate.outputs.mail_receivers }}
+        from: Security Bot <${{ inputs.mail_username }}>
+        body: file://trivy-aggregate-mail.txt
+
+    - name: Evaluate consolidated result
+      if: always()
+      shell: bash
+      env:
+        GATE_FAILED: ${{ steps.aggregate.outputs.gate_failed }}
+      run: |
+        if [ "$GATE_FAILED" = "true" ]; then
+          echo "Trivy scans contain blocking findings or scan failures."
+          exit 1
+        fi

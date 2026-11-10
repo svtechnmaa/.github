@@ -406,8 +406,11 @@ runs:
     - name: Clean mail recipients
       if: always() && (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0' || env.IMAGE_VULN != '0')
       shell: bash
+      env:
+        IT_TEAM_EMAIL: ${{ inputs.it-team-email }}
       run: |
         RAW="${{ env.COMMIT_AUTHOR_EMAIL }},${{ inputs.extra-recipients }}"
+        if [ "${SECRET:-0}" -gt 0 ]; then RAW="${RAW},${IT_TEAM_EMAIL}"; fi
         CLEAN=$(echo "$RAW" | tr ',' '\n' | grep -v 'noreply.github.com' | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
 
         if [ -z "$CLEAN" ]; then
@@ -478,40 +481,7 @@ runs:
         from: Security Bot <${{ inputs.mail-username }}>
         body: file://trivy-mail-report.txt
 
-    # ── 9. Build + mail secret alert → IT team ─────────────────────────────
-    - name: Build secret alert body
-      if: always() && env.SECRET != '0'
-      shell: bash
-      run: |
-        {
-          echo "=== SECRET ALERT ==="
-          echo "Repository : ${{ github.repository }}"
-          echo "PR         : #${{ github.event.pull_request.number }}"
-          echo "Author     : ${{ github.actor }}"
-          echo "Commit     : ${{ github.sha }}"
-          echo "Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          echo ""
-          echo "--- Secrets found ---"
-          [ -f trivy-fs.json ] && jq -r '
-            .Results[]? | .Target as $t | .Secrets[]? |
-            "File    : \($t)\nRule    : \(.RuleID)\nTitle   : \(.Title)\nSeverity: \(.Severity)\n"
-          ' trivy-fs.json 2>/dev/null || echo "(no data)"
-        } > secret-alert.txt
-
-    - name: Mail secret alert to IT team
-      if: always() && env.SECRET != '0'
-      uses: dawidd6/action-send-mail@v16
-      with:
-        server_address: ${{ inputs.smtp-server }}
-        server_port: ${{ inputs.smtp-port }}
-        username: ${{ inputs.mail-username }}
-        password: ${{ inputs.mail-password }}
-        subject: "[SECRET ALERT] ${{ github.repository }} PR #${{ github.event.pull_request.number }} — ${{ env.SECRET }} secret(s)"
-        to: ${{ inputs.it-team-email }}
-        from: Security Bot <${{ inputs.mail-username }}>
-        body: file://secret-alert.txt
-
-    # ── 10. Upload scan artifacts ───────────────────────────────────────────
+    # ── 9. Upload scan artifacts ───────────────────────────────────────────
     - name: Upload scan artifacts
       if: always()
       uses: actions/upload-artifact@v7
@@ -524,7 +494,7 @@ runs:
         if-no-files-found: ignore
       continue-on-error: true
 
-    # ── 11. Fail pipeline ───────────────────────────────────────────────────
+    # ── 10. Fail pipeline ───────────────────────────────────────────────────
     - name: Evaluate result
       if: always()
       shell: bash

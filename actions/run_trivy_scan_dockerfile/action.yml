@@ -14,6 +14,10 @@ inputs:
     description: "Fail the job on HIGH/CRITICAL build context findings by default. Set to true to allow the job to pass."
     required: false
     default: "false"
+  report_mode:
+    description: "Set to collect to defer summary, email, and finding gate to the trivy-report action"
+    required: false
+    default: individual
   mail_username:
     description: "SMTP username for sending email"
     required: true
@@ -44,6 +48,7 @@ runs:
         TRIVY_SERVER: ${{ inputs.trivy_server }}
       run: |
         SCAN_PATH="$(dirname "$DOCKERFILE_PATH")"
+        rm -f trivy-report.json
         echo "🔍 Scanning Dockerfile build context: $SCAN_PATH"
         echo "Dockerfile analyzer target: $DOCKERFILE_PATH"
         echo "DOCKERFILE_SCAN_PATH=$SCAN_PATH" >> "$GITHUB_ENV"
@@ -120,8 +125,25 @@ runs:
         echo "finding_count=$TOTAL_FINDINGS" >> "$GITHUB_OUTPUT"
         echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
 
+    - name: Collect Dockerfile scan result
+      if: always() && inputs.report_mode == 'collect'
+      shell: bash
+      env:
+        SCAN_TARGET: ${{ inputs.dockerfile_path }}
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
+        PARSE_OK: ${{ steps.logging_vulns.outputs.scan_ok }}
+      run: |
+        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$report_dir"
+        scan_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+        if [ -f trivy-report.json ]; then cp trivy-report.json "$scan_dir/report.json"; fi
+        if [ "$PARSE_OK" = "true" ] && [ "$SCAN_OUTCOME" = "success" ]; then scan_ok=true; else scan_ok=false; fi
+        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
+
     - name: Write summary
-      if: always()
+      if: always() && inputs.report_mode != 'collect'
       shell: bash
       env:
         REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
@@ -275,7 +297,7 @@ runs:
         fi
 
     - name: Determine scan report URL
-      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         REPORT_JOB_ID: ${{ inputs.job_id }}
@@ -284,7 +306,7 @@ runs:
       continue-on-error: true
 
     - name: Clean noreply mail receivers
-      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
@@ -300,7 +322,7 @@ runs:
       continue-on-error: true
 
     - name: Build Dockerfile mail report
-      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
@@ -373,7 +395,7 @@ runs:
       continue-on-error: true
 
     - name: Send mail if findings detected
-      if: steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: smtp.gmail.com
@@ -388,7 +410,7 @@ runs:
       continue-on-error: true
 
     - name: Evaluate result
-      if: always()
+      if: always() && inputs.report_mode != 'collect'
       shell: bash
       env:
         IGNORE_FINDING: ${{ inputs.ignore_finding }}
