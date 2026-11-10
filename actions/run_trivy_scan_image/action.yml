@@ -57,6 +57,7 @@ runs:
             --server "$TRIVY_SERVER" \
             --timeout 15m \
             --severity HIGH,CRITICAL \
+            --ignore-unfixed \
             --format json \
             --output trivy-image-report.json \
             --exit-code 0 \
@@ -66,6 +67,7 @@ runs:
           trivy image \
             --timeout 15m \
             --severity HIGH,CRITICAL \
+            --ignore-unfixed \
             --format json \
             --output trivy-image-report.json \
             --exit-code 0 \
