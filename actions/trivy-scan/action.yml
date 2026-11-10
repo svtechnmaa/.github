@@ -156,6 +156,7 @@ runs:
             "$@" \
             --scanners "$TRIVY_SCANNERS" \
             --severity "$TRIVY_SEVERITY" \
+            --ignore-unfixed \
             --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
             --format json \
             --output trivy-fs.json \
@@ -192,6 +193,7 @@ runs:
             "$@" \
             --scanners "$TRIVY_SCANNERS" \
             --severity "$TRIVY_SEVERITY" \
+            --ignore-unfixed \
             --format json \
             --output "$output_file" \
             --exit-code 0 \

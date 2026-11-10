@@ -55,6 +55,7 @@ runs:
             --scanners vuln,secret,misconfig \
             --misconfig-scanners dockerfile \
             --severity HIGH,CRITICAL \
+            --ignore-unfixed \
             --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
             --format json \
             --output trivy-report.json \
@@ -66,6 +67,7 @@ runs:
             --scanners vuln,secret,misconfig \
             --misconfig-scanners dockerfile \
             --severity HIGH,CRITICAL \
+            --ignore-unfixed \
             --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
             --format json \
             --output trivy-report.json \

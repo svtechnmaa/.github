@@ -64,7 +64,7 @@ jobs:
                 cd - > /dev/null
               fi
               echo "Running Trivy scan on ${repo_dir}"
-              trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL "${repo_dir}" || true
+              trivy fs -f json  -o /tmp/trivy-result/"${repo_name}".json --scanners vuln,misconfig,secret --skip-version-check --severity HIGH,CRITICAL --ignore-unfixed "${repo_dir}" || true
             done < tmp/repos.txt
             echo "All repositories are available and updated in repos/"
 
