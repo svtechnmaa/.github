@@ -85,7 +85,7 @@ const gateFailed = totals.failures > 0 || scans.some((scan) =>
   !scan.ignoreFinding && scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0
 );
 const status = totals.failures ? '⚠️ Scan failed' : totalFindings ? '❌ Issues found' : '✅ Clean';
-const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS TO REVIEW' : 'CLEAN';
+const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS FOUND' : 'CLEAN';
 const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
 const cleanScans = scans.length - highlightedScans.length;
 const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.ignoreFinding && scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
@@ -173,7 +173,7 @@ const body = [
   `VULNERABILITIES: ${totals.vulnerabilities}`,
   `SECRETS: ${totals.secrets}`,
   `MISCONFIGURATIONS: ${totals.misconfigurations}`,
-  `SCAN FAILURES: ${totals.failures}`,
+  `SCAN ERRORS: ${totals.failures}`,
   '',
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
@@ -181,6 +181,7 @@ const body = [
     return `${scan.kind.toUpperCase()}: ${scan.target} — ${scan.vulnerabilities.length} vulnerabilities, ${scan.secrets.length} secrets, ${scan.misconfigurations.length} misconfigurations (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
+  ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
   ...(hasNonBlockingFindings ? ['', 'NOT BLOCKING means these findings do not fail the build. They still need review and remediation.'] : []),
   '',
   'Open the workflow run Summary for CVEs, affected packages, fixed versions, files, and remediation details.',
@@ -193,7 +194,7 @@ const cards = [
   ['VULNERABILITIES', totals.vulnerabilities],
   ['SECRETS', totals.secrets],
   ['MISCONFIGURATIONS', totals.misconfigurations],
-  ['SCAN FAILURES', totals.failures],
+  ['SCAN ERRORS', totals.failures],
 ].map(([label, count]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div></td>`).join('');
 const rows = highlightedScans.map((scan) => {
   const result = !scan.scanOk ? 'SCAN FAILED' : scan.ignoreFinding ? 'REVIEW REQUIRED — NOT BLOCKING' : 'ACTION REQUIRED';
@@ -203,6 +204,7 @@ const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif
 <div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>
 <h2 style="font-size:17px;margin-top:28px">FINDINGS SUMMARY</h2><p><strong>${scans.length} scans</strong> completed or attempted · <strong>${cleanScans} clean</strong></p>
 <table style="border-collapse:collapse;width:100%"><tr>${cards}</tr></table>
+${totals.failures ? '<p style="padding:12px;background:#ffebe9"><strong>SCAN ERRORS</strong> means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.</p>' : ''}
 <h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
 ${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px">TARGET</th><th>VULNS</th><th>SECRETS</th><th>MISCONFIGS</th><th>STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
 ${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> means these findings do not fail the build. They still need review and remediation.</p>' : ''}

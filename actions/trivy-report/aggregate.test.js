@@ -73,7 +73,7 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
-  assert.match(data.values.subject, /FINDINGS TO REVIEW/);
+  assert.match(data.values.subject, /\[TRIVY\]\[FINDINGS FOUND\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
   assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> means these findings do not fail the build/);
   assert.doesNotMatch(data.htmlMail, /IGNORE_FINDING/);
@@ -98,6 +98,8 @@ test('scan errors remain blocking even when ignore_finding is true', () => {
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.summary, /Scan failed/);
   assert.match(data.htmlMail, /SCAN FAILED/);
+  assert.match(data.mail, /SCAN ERRORS means a scan did not finish or produced no readable report/);
+  assert.match(data.htmlMail, /<strong>SCAN ERRORS<\/strong> means a scan did not finish/);
 });
 
 test('missing results do not produce a clean report', () => {
