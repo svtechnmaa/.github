@@ -525,9 +525,23 @@ jobs:
               echo "- Secret details include repository, rule ID, title, file, and line number only."
             } > weekly-trivy-report.txt
 
-        # Add the secret-only CSV to the same weekly report when needed.
+        - name: Mail weekly Trivy report
+          if: always()
+          uses: dawidd6/action-send-mail@v16
+          with:
+            server_address: smtp.gmail.com
+            server_port: 465
+            username:  ${{ vars.MAIL_USERNAME }}
+            password: ${{ secrets.MAIL_PASSWORD }}
+            subject: "[Trivy Weekly] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
+            to: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+            from: Security Bot <${{ vars.MAIL_USERNAME }}>
+            body: file://weekly-trivy-report.txt
+            attachments: weekly-trivy-report.csv
+          
+        # ── Build + mail secret alert to IT team ────────────────────────────────
         - name: Build weekly secret CSV report
-          if: always() && env.TOTAL_SECRET != '0' && env.TOTAL_SECRET != ''
+          if: always() && env.TOTAL_SECRET != '0'
           shell: bash
           run: |
             set -euo pipefail
@@ -587,35 +601,53 @@ jobs:
               ' "$report" >> "$SECRET_CSV_REPORT" || true
             done
 
-        - name: Prepare weekly report recipients and attachments
-          if: always()
+        - name: Build weekly secret alert body
+          if: always() && env.TOTAL_SECRET != '0'
           shell: bash
-          env:
-            DEFAULT_RECIPIENTS: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
-            IT_TEAM_EMAIL: ${{ vars.IT_TEAM_EMAIL }}
-            MAIL_USERNAME: ${{ vars.MAIL_USERNAME }}
           run: |
-            recipients="$DEFAULT_RECIPIENTS"
-            attachments="weekly-trivy-report.csv"
-            if [ "${TOTAL_SECRET:-0}" -gt 0 ]; then
-              recipients="${recipients},${IT_TEAM_EMAIL}"
-              if [ -f weekly-secret-alert.csv ]; then attachments="${attachments},weekly-secret-alert.csv"; fi
-            fi
-            recipients="$(printf '%s' "$recipients" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | sort -u | paste -sd, -)"
-            if [ -z "$recipients" ]; then recipients="$MAIL_USERNAME"; fi
-            echo "WEEKLY_MAIL_RECEIVERS=$recipients" >> "$GITHUB_ENV"
-            echo "WEEKLY_ATTACHMENTS=$attachments" >> "$GITHUB_ENV"
-
-        - name: Mail weekly Trivy report
-          if: always()
+            REPORT_DIR="/tmp/trivy-result"
+            {
+              echo "=== WEEKLY SECRET ALERT ==="
+              echo ""
+              echo "Organization : ${ORG_NAME}"
+              echo "Scan time    : ${SCAN_TIMESTAMP:-unknown}"
+              echo "Run URL      : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              echo ""
+              echo "Total secrets found: ${TOTAL_SECRET}"
+              echo ""
+              echo "--- Secrets found ---"
+          
+              for report in "$REPORT_DIR"/*.json; do
+                [ -f "$report" ] || continue
+          
+                repo_name="$(basename "$report" .json)"
+          
+                jq -r --arg repo "$repo_name" '
+                  .Results[]? |
+                  .Target as $target |
+                  .Secrets[]? |
+                  "Repository : \($repo)\nFile       : \($target)\nLine       : \((.StartLine // "-")|tostring)-\((.EndLine // .StartLine // "-")|tostring)\nRule       : \(.RuleID // "-")\nCategory   : \(.Category // "-")\nTitle      : \(.Title // "-")\nSeverity   : \(.Severity // "-")\n"
+                ' "$report" 2>/dev/null || true
+              done
+          
+              echo ""
+              echo "Secret values are intentionally not included in this email."
+              echo "A secret-only CSV is attached for IT tracking."
+              echo ""
+              echo "Full details:"
+              echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > weekly-secret-alert.txt
+          
+        - name: Mail weekly secret alert to IT team
+          if: always() && env.TOTAL_SECRET != '0'
           uses: dawidd6/action-send-mail@v16
           with:
             server_address: smtp.gmail.com
             server_port: 465
             username:  ${{ vars.MAIL_USERNAME }}
             password: ${{ secrets.MAIL_PASSWORD }}
-            subject: "[Trivy Weekly] ${{ env.SCAN_STATUS }} — ${{ env.ORG_NAME }} — ${{ env.TOTAL_FINDINGS }} finding(s)"
-            to: ${{ env.WEEKLY_MAIL_RECEIVERS }}
+            subject: "[SECRET ALERT][Weekly Trivy] ${{ env.ORG_NAME }} — ${{ env.TOTAL_SECRET }} secret(s)"
+            to: ${{ vars.IT_TEAM_EMAIL }}
             from: Security Bot <${{ vars.MAIL_USERNAME }}>
-            body: file://weekly-trivy-report.txt
-            attachments: ${{ env.WEEKLY_ATTACHMENTS }}
+            body: file://weekly-secret-alert.txt
+            attachments: weekly-secret-alert.csv
