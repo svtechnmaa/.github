@@ -72,10 +72,6 @@ inputs:
     description: Set to true to let a downstream job send the Trivy email after this build job finishes.
     required: false
     default: "false"
-  trivy_mail_mode:
-    description: Legacy input. immediate sends now; deferred saves mail for a downstream job. Use trivy_mail_after_job for new workflows.
-    required: false
-    default: immediate
 
 outputs:
   check_no_ci:
@@ -327,7 +323,6 @@ runs:
         mail_password: ${{ inputs.mail_password }}
         mail_receivers: ${{ steps.commit_author.outputs.email }},${{ inputs.default_mail_recipients }}
         mail_after_job: ${{ inputs.trivy_mail_after_job }}
-        mail_mode: ${{ inputs.trivy_mail_mode }}
 
     - name: Run application container
       if: >-

@@ -10,10 +10,6 @@ inputs:
     description: Set to true to save the email for a downstream mail job after this job finishes and its Summary is available.
     required: false
     default: "false"
-  mail_mode:
-    description: Legacy input. immediate sends now; deferred saves mail for a downstream job. Use mail_after_job for new workflows.
-    required: false
-    default: immediate
   mail_username:
     description: SMTP sender address.
     required: true
@@ -74,7 +70,7 @@ runs:
       run: node "$ACTION_PATH/generate-report.js"
 
     - name: Save mail for downstream job
-      if: steps.report.outputs.send_mail == 'true' && (inputs.mail_after_job == 'true' || inputs.mail_mode == 'deferred')
+      if: steps.report.outputs.send_mail == 'true' && inputs.mail_after_job == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.report.outputs.artifact_name }}
@@ -85,7 +81,7 @@ runs:
         if-no-files-found: error
 
     - name: Send Trivy report mail now
-      if: steps.report.outputs.send_mail == 'true' && inputs.mail_after_job != 'true' && inputs.mail_mode != 'deferred'
+      if: steps.report.outputs.send_mail == 'true' && inputs.mail_after_job != 'true'
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: ${{ inputs.smtp_server }}

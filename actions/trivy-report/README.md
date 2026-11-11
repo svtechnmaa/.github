@@ -15,8 +15,7 @@ the job. Scan errors always fail the job. Put this step before publishing an ima
 GitHub displays the Summary only after the scan job finishes. Set
 `mail_after_job: 'true'` on `trivy-report` and add a downstream `trivy-mail`
 job so the link is ready when the email arrives. By default, `trivy-report`
-sends mail in the same job. The older `report_mode` (`individual`/`collect`)
-and `mail_mode` (`immediate`/`deferred`) inputs still work.
+sends mail in the same job.
 
 ```yaml
 - name: Scan Dockerfile

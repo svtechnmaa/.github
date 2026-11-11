@@ -18,10 +18,6 @@ inputs:
     description: "Set to true to add this scan to one report created after all scans. False keeps this scan's own Summary and email."
     required: false
     default: "false"
-  report_mode:
-    description: "Legacy input. individual reports this scan alone; collect adds it to one report. Use merge_report for new workflows."
-    required: false
-    default: individual
   mail_username:
     description: "SMTP username for sending email"
     required: true
@@ -130,7 +126,7 @@ runs:
         echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
 
     - name: Collect Dockerfile scan result
-      if: always() && (inputs.merge_report == 'true' || inputs.report_mode == 'collect')
+      if: always() && inputs.merge_report == 'true'
       shell: bash
       env:
         SCAN_TARGET: ${{ inputs.dockerfile_path }}
@@ -149,7 +145,7 @@ runs:
           '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
 
     - name: Write summary
-      if: always() && inputs.merge_report != 'true' && inputs.report_mode != 'collect'
+      if: always() && inputs.merge_report != 'true'
       shell: bash
       env:
         REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
@@ -303,7 +299,7 @@ runs:
         fi
 
     - name: Determine scan report URL
-      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.merge_report != 'true' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         REPORT_JOB_ID: ${{ inputs.job_id }}
@@ -312,7 +308,7 @@ runs:
       continue-on-error: true
 
     - name: Clean noreply mail receivers
-      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.merge_report != 'true' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
@@ -328,7 +324,7 @@ runs:
       continue-on-error: true
 
     - name: Build Dockerfile mail report
-      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.merge_report != 'true' && steps.logging_vulns.outputs.detected_vulns == 'true'
       shell: bash
       env:
         REPORT_DOCKERFILE: ${{ inputs.dockerfile_path }}
@@ -401,7 +397,7 @@ runs:
       continue-on-error: true
 
     - name: Send mail if findings detected
-      if: inputs.merge_report != 'true' && inputs.report_mode != 'collect' && steps.logging_vulns.outputs.detected_vulns == 'true'
+      if: inputs.merge_report != 'true' && steps.logging_vulns.outputs.detected_vulns == 'true'
       uses: dawidd6/action-send-mail@v16
       with:
         server_address: smtp.gmail.com
@@ -416,7 +412,7 @@ runs:
       continue-on-error: true
 
     - name: Evaluate result
-      if: always() && inputs.merge_report != 'true' && inputs.report_mode != 'collect'
+      if: always() && inputs.merge_report != 'true'
       shell: bash
       env:
         IGNORE_FINDING: ${{ inputs.ignore_finding }}
