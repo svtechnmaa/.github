@@ -26,9 +26,6 @@ function run(scans) {
       GITHUB_RUN_ATTEMPT: '1',
       GITHUB_REPOSITORY: 'svtechnmaa/svtech_report',
       GITHUB_SERVER_URL: 'https://github.com',
-      MAIL_RECEIVERS: 'author@example.com,author@example.com',
-      MAIL_USERNAME: 'sender@example.com',
-      IT_TEAM_EMAIL: 'it@example.com',
     }, root);
   const values = Object.fromEntries(fs.readFileSync(output, 'utf8').trim().split('\n').map((line) => {
     const index = line.indexOf('=');
@@ -48,7 +45,7 @@ function run(scans) {
 const vulnerability = { VulnerabilityID: 'CVE-2026-1', PrimaryURL: 'https://example.com/CVE-2026-1', Severity: 'HIGH', PkgName: 'pkg', FixedVersion: '2.0' };
 const secret = { RuleID: 'secret-rule', Severity: 'HIGH', Title: 'Credential', StartLine: 4 };
 
-test('combines repeated scans, reports ignored findings, and sends one email to IT for secrets', () => {
+test('combines repeated scans and records secret count for downstream mail', () => {
   const data = run([
     { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
     { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'app:first', Secrets: [secret] }] } },
@@ -58,10 +55,9 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.equal(data.values.finding_count, '2');
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
-  assert.equal(data.values.mail_receivers, 'author@example.com,it@example.com');
   assert.deepEqual(data.mailMetadata, {
-    subject: data.values.subject,
-    mail_receivers: data.values.mail_receivers,
+    subject: '[TRIVY][FINDINGS FOUND] 1 vulns, 1 secrets — svtechnmaa/svtech_report',
+    secret_count: 1,
   });
   assert.match(data.summary, /## 1\. Summary/);
   assert.match(data.summary, /Commit:\*\* \[`1234567`\]\(https:\/\/github\.com\/svtechnmaa\/svtech_report\/commit\/123456789abcdef\)/);
@@ -73,7 +69,7 @@ test('combines repeated scans, reports ignored findings, and sends one email to 
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
-  assert.match(data.values.subject, /\[TRIVY\]\[FINDINGS FOUND\]/);
+  assert.match(data.mailMetadata.subject, /\[TRIVY\]\[FINDINGS FOUND\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
   assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> means these findings do not fail the build/);
   assert.doesNotMatch(data.htmlMail, /IGNORE_FINDING/);

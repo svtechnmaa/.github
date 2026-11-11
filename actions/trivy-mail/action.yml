@@ -3,7 +3,7 @@ description: Send one Trivy report email after the scan job finishes and its Git
 
 inputs:
   artifact_name:
-    description: Artifact name produced by trivy-report when mail_after_job is true.
+    description: Artifact name produced by trivy-report when findings or scan errors require an email.
     required: true
   mail_username:
     description: SMTP sender address.
@@ -11,6 +11,14 @@ inputs:
   mail_password:
     description: SMTP password.
     required: true
+  mail_receivers:
+    description: Comma-separated report recipients.
+    required: false
+    default: ""
+  it_team_email:
+    description: Recipient added when the report contains secrets.
+    required: false
+    default: ""
   smtp_server:
     description: SMTP server.
     required: false
@@ -32,11 +40,20 @@ runs:
     - name: Read mail details
       id: mail_details
       shell: bash
+      env:
+        RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
+        IT_TEAM_EMAIL: ${{ inputs.it_team_email }}
+        FALLBACK_MAIL_RECEIVER: ${{ inputs.mail_username }}
       run: |
-        jq -e '.subject | type == "string" and length > 0' trivy-mail-details.json > /dev/null
-        jq -e '.mail_receivers | type == "string" and length > 0' trivy-mail-details.json > /dev/null
-        echo "subject=$(jq -r '.subject' trivy-mail-details.json)" >> "$GITHUB_OUTPUT"
-        echo "mail_receivers=$(jq -r '.mail_receivers' trivy-mail-details.json)" >> "$GITHUB_OUTPUT"
+        subject="$(jq -er '.subject | select(type == "string" and length > 0)' trivy-mail-details.json)"
+        secret_count="$(jq -er '.secret_count | select(type == "number" and . >= 0)' trivy-mail-details.json)"
+        recipients="$RAW_MAIL_RECEIVERS"
+        if [ "$secret_count" -gt 0 ]; then recipients="${recipients},${IT_TEAM_EMAIL}"; fi
+        recipients="$(printf '%s' "$recipients" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d; /noreply\.github\.com/d' | sort -u | paste -sd, -)"
+        if [ -z "$recipients" ]; then recipients="$FALLBACK_MAIL_RECEIVER"; fi
+        if [ -z "$recipients" ]; then echo 'No Trivy mail recipients configured' >&2; exit 1; fi
+        echo "subject=$subject" >> "$GITHUB_OUTPUT"
+        echo "mail_receivers=$recipients" >> "$GITHUB_OUTPUT"
 
     - name: Send Trivy report mail
       uses: dawidd6/action-send-mail@v16

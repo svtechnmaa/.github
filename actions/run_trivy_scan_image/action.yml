@@ -1,5 +1,5 @@
-name: Docker Image Scan and Mail
-description: Scan a Docker image with Trivy, report HIGH/CRITICAL vulnerabilities and secrets, and gate the job by default
+name: Docker Image Scan
+description: Scan a Docker image and collect its Trivy results for a later report.
 
 inputs:
   image_name:
@@ -14,30 +14,14 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: "Fail the job on HIGH/CRITICAL image vulnerabilities or secrets by default. Set to true to allow the job to pass"
+    description: "Pass the finding policy to trivy-report. Set to true to report findings without failing the job."
     required: false
     default: "false"
-  merge_report:
-    description: "Set to true to add this scan to one report created after all scans. False keeps this scan's own Summary and email."
-    required: false
-    default: "false"
-  mail_username:
-    description: "SMTP username for sending email"
-    required: true
-  mail_password:
-    description: "SMTP password for sending email"
-    required: true
   commit_author_name:
-    description: "Name of commit author to include in email"
-    required: true
-  mail_receivers:
-    description: "Mail addresses of recipients"
+    description: "Name of the commit author to include in the collected scan metadata"
     required: true
   commit_id:
     description: "Commit ID associated with this scan"
-    required: true
-  job_id:
-    description: "GitHub job ID for the current workflow run"
     required: true
 
 runs:
@@ -80,46 +64,8 @@ runs:
         fi
       continue-on-error: true
 
-    - name: Parse image findings
-      id: parse_findings
-      if: always()
-      shell: bash
-      run: |
-        IMAGE_VULN=0
-        IMAGE_SECRET=0
-        SCAN_OK=false
-
-        if [ -s trivy-image-report.json ] && jq empty trivy-image-report.json 2>/dev/null; then
-          IMAGE_VULN=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-image-report.json 2>/dev/null || echo 0)
-          IMAGE_SECRET=$(jq '[.Results[]?.Secrets[]?] | length' trivy-image-report.json 2>/dev/null || echo 0)
-          SCAN_OK=true
-        else
-          echo "::warning::Trivy did not produce a valid image JSON report. Check the scan logs."
-        fi
-
-        if [ "$SCAN_OK" != "true" ]; then
-          STATUS="⚠️ Scan failed"
-          DETECTED=false
-        elif [ "$IMAGE_VULN" -gt 0 ] || [ "$IMAGE_SECRET" -gt 0 ]; then
-          STATUS="❌ Issues found"
-          DETECTED=true
-          echo "🚨 Detected $IMAGE_VULN HIGH/CRITICAL image vulnerability finding(s) and $IMAGE_SECRET secret finding(s)."
-        else
-          STATUS="✅ No blocking findings"
-          DETECTED=false
-          echo "✅ No HIGH/CRITICAL image vulnerabilities or secrets detected."
-        fi
-
-        echo "IMAGE_VULN=$IMAGE_VULN" >> "$GITHUB_ENV"
-        echo "IMAGE_SECRET=$IMAGE_SECRET" >> "$GITHUB_ENV"
-        echo "SCAN_OK=$SCAN_OK" >> "$GITHUB_ENV"
-        echo "SCAN_STATUS=$STATUS" >> "$GITHUB_ENV"
-        echo "detected_findings=$DETECTED" >> "$GITHUB_OUTPUT"
-        echo "finding_count=$((IMAGE_VULN + IMAGE_SECRET))" >> "$GITHUB_OUTPUT"
-        echo "scan_ok=$SCAN_OK" >> "$GITHUB_OUTPUT"
-
     - name: Collect image scan result
-      if: always() && inputs.merge_report == 'true'
+      if: always()
       shell: bash
       env:
         SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
@@ -127,213 +73,11 @@ runs:
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
         IGNORE_FINDING: ${{ inputs.ignore_finding }}
         SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
-        PARSE_OK: ${{ steps.parse_findings.outputs.scan_ok }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
         mkdir -p "$report_dir"
         scan_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
         if [ -f trivy-image-report.json ]; then cp trivy-image-report.json "$scan_dir/report.json"; fi
-        if [ "$PARSE_OK" = "true" ] && [ "$SCAN_OUTCOME" = "success" ]; then scan_ok=true; else scan_ok=false; fi
+        if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-image-report.json ] && jq -e '.Results | type == "array"' trivy-image-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
         jq -n --arg kind image --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
           '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
-
-    - name: Write summary
-      if: always() && inputs.merge_report != 'true'
-      shell: bash
-      env:
-        REPORT_IMAGE_REF: ${{ inputs.image_name }}:${{ inputs.image_tag }}
-        REPORT_AUTHOR: ${{ inputs.commit_author_name }}
-        REPORT_COMMIT: ${{ inputs.commit_id }}
-      run: |
-        IMAGE_VULN="${IMAGE_VULN:-0}"
-        IMAGE_SECRET="${IMAGE_SECRET:-0}"
-        SCAN_OK="${SCAN_OK:-false}"
-        SCAN_STATUS="${SCAN_STATUS:-⚠️ Scan failed}"
-        COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${REPORT_COMMIT}"
-
-        {
-          echo "# 🐳 Trivy Image Scan — $SCAN_STATUS"
-          echo ""
-          echo "## 1. Summary"
-          echo ""
-          echo "**Image:** \`$REPORT_IMAGE_REF\` · **Commit:** [\`$REPORT_COMMIT\`]($COMMIT_URL) · **Author:** \`$REPORT_AUTHOR\`"
-          echo ""
-          echo "| Category | Count | Status |"
-          echo "|----------|:-----:|:------:|"
-          echo "| Image vulnerabilities (HIGH,CRITICAL) | $IMAGE_VULN | $([ "$SCAN_OK" != "true" ] && echo "⚠️" || { [ "$IMAGE_VULN" -eq 0 ] && echo "✅" || echo "❌"; }) |"
-          echo "| Image secrets (HIGH,CRITICAL) | $IMAGE_SECRET | $([ "$SCAN_OK" != "true" ] && echo "⚠️" || { [ "$IMAGE_SECRET" -eq 0 ] && echo "✅" || echo "❌"; }) |"
-          echo ""
-        } >> "$GITHUB_STEP_SUMMARY"
-
-        if [ "$IMAGE_VULN" -gt 0 ] && [ -f trivy-image-report.json ]; then
-          {
-            echo "### 🛡️ Vulnerabilities"
-            echo "<details><summary>🔴 View all $IMAGE_VULN finding(s)</summary>"
-            echo ""
-            echo "| Target | Severity | CVE | Package | Installed | Fixed in |"
-            echo "|--------|----------|-----|---------|-----------|----------|"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          jq -r '
-            def clean: tostring | gsub("[\r\n|]"; " ");
-            .Results[]? |
-            .Target as $target |
-            .Vulnerabilities[]? |
-            (
-              if (.PrimaryURL // "") == ""
-              then (.VulnerabilityID // "Unknown")
-              else "[\(.VulnerabilityID // "Unknown")](\(.PrimaryURL))"
-              end
-            ) as $cve |
-            "| \($target // "-" | clean) | \(.Severity // "-" | clean) | \($cve) | \(.PkgName // "-" | clean) | \(.InstalledVersion // "-" | clean) | \(if (.FixedVersion // "") == "" then "-" else (.FixedVersion | clean) end) |"
-          ' trivy-image-report.json >> "$GITHUB_STEP_SUMMARY" || true
-
-          {
-            echo ""
-            echo "</details>"
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-        if [ "$IMAGE_SECRET" -gt 0 ] && [ -f trivy-image-report.json ]; then
-          {
-            echo "### 🔑 Secrets"
-            echo "| Target | Severity | Rule | Title | Line |"
-            echo "|--------|----------|------|-------|------|"
-          } >> "$GITHUB_STEP_SUMMARY"
-          jq -r '
-            def clean: tostring | gsub("[\r\n|]"; " ");
-            .Results[]? | .Target as $target | .Secrets[]? |
-            "| \($target // "-" | clean) | \(.Severity // "-" | clean) | \(.RuleID // "-" | clean) | \(.Title // "-" | clean) | \(.StartLine // "-" | clean) |"
-          ' trivy-image-report.json >> "$GITHUB_STEP_SUMMARY" || true
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-        if [ "$SCAN_OK" != "true" ]; then
-          {
-            echo "## 2. Next action"
-            echo ""
-            echo "1. Fix the scan error shown in the logs, then rerun the scan before relying on this result."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        elif [ "$IMAGE_VULN" -gt 0 ] || [ "$IMAGE_SECRET" -gt 0 ]; then
-          {
-            echo "## 2. Next action"
-            echo ""
-            if [ "$IMAGE_VULN" -gt 0 ]; then echo "- **Fix vulnerabilities ($IMAGE_VULN):** Update affected packages or the base image."; fi
-            if [ "$IMAGE_SECRET" -gt 0 ]; then echo "- **Fix secrets ($IMAGE_SECRET):** Rotate and remove exposed credentials using the target and line above."; fi
-            echo ""
-            echo "Rebuild the image and rerun the scan before deploying."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-    - name: Determine scan report URL
-      if: inputs.merge_report != 'true' && steps.parse_findings.outputs.detected_findings == 'true'
-      shell: bash
-      env:
-        REPORT_JOB_ID: ${{ inputs.job_id }}
-      run: |
-        echo "scan_report_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${REPORT_JOB_ID}" >> "$GITHUB_ENV"
-      continue-on-error: true
-
-    - name: Clean noreply mail receivers
-      if: inputs.merge_report != 'true' && steps.parse_findings.outputs.detected_findings == 'true'
-      shell: bash
-      env:
-        RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
-        FALLBACK_MAIL_RECEIVER: ${{ inputs.mail_username }}
-      run: |
-        CLEAN=$(echo "$RAW_MAIL_RECEIVERS" | tr ',' '\n' | grep -v 'noreply.github.com' | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
-
-        if [ -z "$CLEAN" ]; then
-          CLEAN="$FALLBACK_MAIL_RECEIVER"
-        fi
-
-        echo "MAIL_RECEIVERS=$CLEAN" >> "$GITHUB_ENV"
-      continue-on-error: true
-
-    - name: Build image mail report
-      if: inputs.merge_report != 'true' && steps.parse_findings.outputs.detected_findings == 'true'
-      shell: bash
-      env:
-        REPORT_IMAGE_REF: ${{ inputs.image_name }}:${{ inputs.image_tag }}
-        REPORT_AUTHOR: ${{ inputs.commit_author_name }}
-        REPORT_COMMIT: ${{ inputs.commit_id }}
-      run: |
-        {
-          echo "Trivy Docker Image Scan — $SCAN_STATUS"
-          echo "==============================================="
-          echo "Repository : ${{ github.repository }}"
-          echo "Image      : $REPORT_IMAGE_REF"
-          echo "Author     : $REPORT_AUTHOR"
-          echo "Commit     : ${{ github.server_url }}/${{ github.repository }}/commit/$REPORT_COMMIT"
-          echo "Report     : $scan_report_url"
-          echo ""
-          echo "Findings summary"
-          echo "----------------"
-          echo "HIGH/CRITICAL image vulnerabilities: ${IMAGE_VULN:-0}"
-          echo "HIGH/CRITICAL image secrets: ${IMAGE_SECRET:-0}"
-          echo ""
-          if [ "${IMAGE_VULN:-0}" -gt 0 ]; then
-            echo "Affected packages"
-            echo "-----------------"
-            jq -r '
-              .Results[]? |
-              .Target as $target |
-              .Vulnerabilities[]? |
-              "Target    : \($target // "-")\nCVE       : \(.VulnerabilityID // "Unknown")\nSeverity  : \(.Severity // "Unknown")\nPackage   : \(.PkgName // "Unknown")\nInstalled : \(.InstalledVersion // "Unknown")\nFixed in  : \(if (.FixedVersion // "") == "" then "Not provided by Trivy" else .FixedVersion end)\nReference : \(.PrimaryURL // "-")\n"
-            ' trivy-image-report.json 2>/dev/null || echo "(unable to read vulnerability findings)"
-          fi
-          if [ "${IMAGE_SECRET:-0}" -gt 0 ]; then
-            echo "Secret findings (values omitted)"
-            echo "--------------------------------"
-            jq -r '
-              .Results[]? | .Target as $target | .Secrets[]? |
-              "Target: \($target // "-")\nRule: \(.RuleID // "Unknown")\nSeverity: \(.Severity // "Unknown")\nTitle: \(.Title // "Unknown")\nLine: \(.StartLine // "-")\n"
-            ' trivy-image-report.json 2>/dev/null || echo "(unable to read secret findings)"
-          fi
-          echo "Next actions"
-          echo "------------"
-          if [ "${IMAGE_VULN:-0}" -gt 0 ]; then echo "- Update affected packages or the base image."; fi
-          if [ "${IMAGE_SECRET:-0}" -gt 0 ]; then echo "- Rotate and remove exposed credentials from the image."; fi
-          echo "- Rebuild and publish the image, then rerun the workflow before deploying."
-        } > trivy-image-mail-report.txt
-      continue-on-error: true
-
-    - name: Send mail if image findings detected
-      if: inputs.merge_report != 'true' && steps.parse_findings.outputs.detected_findings == 'true'
-      uses: dawidd6/action-send-mail@v16
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        secure: true
-        username: ${{ inputs.mail_username }}
-        password: ${{ inputs.mail_password }}
-        subject: "[Trivy] ${{ env.IMAGE_VULN }} vuln(s), ${{ env.IMAGE_SECRET }} secret(s) in ${{ inputs.image_name }}:${{ inputs.image_tag }}"
-        body: file://trivy-image-mail-report.txt
-        to: ${{ env.MAIL_RECEIVERS }}
-        from: Security Bot <${{ inputs.mail_username }}>
-      continue-on-error: true
-
-    - name: Evaluate result
-      if: always() && inputs.merge_report != 'true'
-      shell: bash
-      env:
-        IGNORE_FINDING: ${{ inputs.ignore_finding }}
-        SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
-      run: |
-        FAIL=0
-        if [ "$SCAN_OUTCOME" != "success" ] || [ "${SCAN_OK:-false}" != "true" ]; then echo "❌ Trivy image scan failed or did not produce a valid report."; FAIL=1; fi
-        if [ "${IMAGE_VULN:-0}" -gt 0 ]; then echo "❌ $IMAGE_VULN HIGH/CRITICAL image vulnerability finding(s)."; fi
-        if [ "${IMAGE_SECRET:-0}" -gt 0 ]; then echo "❌ $IMAGE_SECRET HIGH/CRITICAL image secret finding(s)."; fi
-        if [ "${IMAGE_VULN:-0}" -gt 0 ] || [ "${IMAGE_SECRET:-0}" -gt 0 ]; then
-          if [ "$IGNORE_FINDING" = "true" ]; then
-            echo "⚠️ ignore_finding=true; allowing findings without ignoring scan failures."
-          else
-            FAIL=1
-          fi
-        elif [ "$FAIL" -eq 0 ]; then
-          echo "✅ No blocking image findings."
-        fi
-        exit "$FAIL"

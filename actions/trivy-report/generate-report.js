@@ -216,23 +216,16 @@ ${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>N
 </body></html>`;
 fs.writeFileSync(mailHtmlPath, htmlBody);
 
-const recipients = [env.MAIL_RECEIVERS || '', totals.secrets ? env.IT_TEAM_EMAIL || '' : '']
-  .join(',').split(',').map((value) => value.trim())
-  .filter((value) => value && !value.includes('noreply.github.com'));
-if (!recipients.length && env.MAIL_USERNAME) recipients.push(env.MAIL_USERNAME);
-const uniqueRecipients = [...new Set(recipients)];
 const outputs = {
   scan_count: scans.length,
   finding_count: totalFindings,
   gate_failed: gateFailed,
   send_mail: totalFindings > 0 || totals.failures > 0,
-  mail_receivers: uniqueRecipients.join(','),
-  subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,
   artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
 };
 fs.writeFileSync(mailDetailsPath, JSON.stringify({
-  subject: outputs.subject,
-  mail_receivers: outputs.mail_receivers,
+  subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,
+  secret_count: totals.secrets,
 }, null, 2));
 for (const [key, value] of Object.entries(outputs)) fs.appendFileSync(env.GITHUB_OUTPUT, `${key}=${value}\n`);
 return outputs;

@@ -1,36 +1,11 @@
 name: Trivy Report for All Scans
-description: Create one Summary and one email from all Dockerfile and image scans in this workflow.
+description: Create one Summary and prepare one email from all Dockerfile and image scans in this workflow.
 
 inputs:
   report_dir:
     description: Directory containing collected scan folders; defaults to this run's runner temp directory.
     required: false
     default: ""
-  mail_after_job:
-    description: Set to true to save the email for a downstream mail job after this job finishes and its Summary is available.
-    required: false
-    default: "false"
-  mail_username:
-    description: SMTP sender address.
-    required: true
-  mail_password:
-    description: SMTP password.
-    required: true
-  mail_receivers:
-    description: Comma-separated report recipients.
-    required: true
-  it_team_email:
-    description: Recipient added to the same report email when secrets are found.
-    required: false
-    default: ""
-  smtp_server:
-    description: SMTP server.
-    required: false
-    default: smtp.gmail.com
-  smtp_port:
-    description: SMTP port.
-    required: false
-    default: "465"
 
 outputs:
   finding_count:
@@ -45,14 +20,8 @@ outputs:
   send_mail:
     description: Whether findings or scan failures require an email.
     value: ${{ steps.report.outputs.send_mail }}
-  mail_receivers:
-    description: Deduplicated recipients, including IT when secrets are present.
-    value: ${{ steps.report.outputs.mail_receivers }}
-  subject:
-    description: Report mail subject.
-    value: ${{ steps.report.outputs.subject }}
   artifact_name:
-    description: Mail files artifact name when mail_after_job is true.
+    description: Mail files artifact name when findings or scan errors require an email.
     value: ${{ steps.report.outputs.artifact_name }}
 
 runs:
@@ -63,14 +32,11 @@ runs:
       shell: bash
       env:
         REPORT_DIR: ${{ inputs.report_dir }}
-        MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
-        MAIL_USERNAME: ${{ inputs.mail_username }}
-        IT_TEAM_EMAIL: ${{ inputs.it_team_email }}
         ACTION_PATH: ${{ github.action_path }}
       run: node "$ACTION_PATH/generate-report.js"
 
     - name: Save mail for downstream job
-      if: steps.report.outputs.send_mail == 'true' && inputs.mail_after_job == 'true'
+      if: steps.report.outputs.send_mail == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.report.outputs.artifact_name }}
@@ -79,21 +45,6 @@ runs:
           trivy-mail.html
           trivy-mail-details.json
         if-no-files-found: error
-
-    - name: Send Trivy report mail now
-      if: steps.report.outputs.send_mail == 'true' && inputs.mail_after_job != 'true'
-      uses: dawidd6/action-send-mail@v16
-      with:
-        server_address: ${{ inputs.smtp_server }}
-        server_port: ${{ inputs.smtp_port }}
-        secure: true
-        username: ${{ inputs.mail_username }}
-        password: ${{ inputs.mail_password }}
-        subject: ${{ steps.report.outputs.subject }}
-        to: ${{ steps.report.outputs.mail_receivers }}
-        from: Security Bot <${{ inputs.mail_username }}>
-        body: file://trivy-mail.txt
-        html_body: file://trivy-mail.html
 
     - name: Evaluate Trivy scan results
       if: always()
