@@ -1,5 +1,20 @@
 # One Trivy report for all scans
 
+## Flow at a glance
+
+```text
+Dockerfile/image scans (merge_report: true)
+  -> collect results without sending mail
+  -> trivy-report (once after all scans)
+       -> write one GitHub Summary and decide whether findings fail the job
+       -> no findings and no scan errors: no mail
+       -> any findings or scan errors:
+            mail_after_job: false -> send one mail now
+            mail_after_job: true  -> save mail artifact
+                                     -> scan job finishes
+                                     -> trivy-mail sends one mail
+```
+
 `run_trivy_scan_dockerfile` and `run_trivy_scan_image` report each scan on its
 own by default. Set `merge_report: 'true'` on every scan to save results for
 one report instead.
