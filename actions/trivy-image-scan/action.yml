@@ -1,4 +1,4 @@
-name: Docker Image Scan
+name: Trivy Image Scan
 description: Scan a Docker image and collect its Trivy results for a later report.
 
 inputs:
@@ -76,8 +76,8 @@ runs:
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
         mkdir -p "$report_dir"
-        scan_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
-        if [ -f trivy-image-report.json ]; then cp trivy-image-report.json "$scan_dir/report.json"; fi
+        scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+        if [ -f trivy-image-report.json ]; then cp trivy-image-report.json "$scan_result_dir/report.json"; fi
         if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-image-report.json ] && jq -e '.Results | type == "array"' trivy-image-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
         jq -n --arg kind image --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_dir/meta.json"
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"

@@ -264,7 +264,7 @@ runs:
         steps.build_plan.outputs.should_build == 'true' &&
         inputs.enable_scans == 'true' &&
         steps.check_commit_message.outputs.no_scan != 'true'
-      uses: svtechnmaa/.github/actions/run_trivy_scan_dockerfile@main
+      uses: svtechnmaa/.github/actions/trivy-dockerfile-scan@main
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         ignore_finding: ${{ inputs.ignore_finding }}
@@ -277,7 +277,7 @@ runs:
         steps.build_plan.outputs.should_build == 'true' &&
         inputs.enable_scans == 'true' &&
         steps.check_commit_message.outputs.no_scan != 'true'
-      uses: svtechnmaa/.github/actions/run_trivy_scan_image@main
+      uses: svtechnmaa/.github/actions/trivy-image-scan@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
         ignore_finding: ${{ inputs.ignore_finding }}
