@@ -1,0 +1,83 @@
+name: Trivy Image Scan
+description: Scan a Docker image and collect its Trivy results for a later report.
+
+inputs:
+  image_name:
+    description: "Docker image name to scan"
+    required: true
+  image_tag:
+    description: "Docker image tag to scan"
+    required: false
+    default: "latest"
+  trivy_server:
+    description: "Trivy server URL (if using server mode)"
+    required: false
+    default: ""
+  ignore_finding:
+    description: "Pass the finding policy to trivy-report. Set to true to report findings without failing the job."
+    required: false
+    default: "false"
+  commit_author_name:
+    description: "Name of the commit author to include in the collected scan metadata"
+    required: true
+  commit_id:
+    description: "Commit ID associated with this scan"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Scan Docker image
+      id: scan_docker_image
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+        TRIVY_SERVER: ${{ inputs.trivy_server }}
+      run: |
+        echo "🔍 Checking Trivy server availability..."
+        rm -f trivy-image-report.json
+
+        if [ -n "$TRIVY_SERVER" ] && curl -sS --fail "${TRIVY_SERVER%/}/healthz" > /dev/null; then
+          echo "✅ Trivy server is UP"
+          trivy image \
+            --server "$TRIVY_SERVER" \
+            --timeout 15m \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-image-report.json \
+            --exit-code 0 \
+            "$IMAGE_REF"
+        else
+          echo "⚠️ Trivy server is unavailable. Falling back to local scan."
+          trivy image \
+            --timeout 15m \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-image-report.json \
+            --exit-code 0 \
+            "$IMAGE_REF"
+        fi
+      continue-on-error: true
+
+    - name: Collect image scan result
+      if: always()
+      shell: bash
+      env:
+        SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+        SCAN_COMMIT: ${{ inputs.commit_id }}
+        SCAN_AUTHOR: ${{ inputs.commit_author_name }}
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
+      run: |
+        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$report_dir"
+        scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+        if [ -f trivy-image-report.json ]; then cp trivy-image-report.json "$scan_result_dir/report.json"; fi
+        if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-image-report.json ] && jq -e '.Results | type == "array"' trivy-image-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
+        jq -n --arg kind image --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"

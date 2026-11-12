@@ -48,6 +48,9 @@ jobs:
       commit_short_id: ${{ steps.resolve_build_image.outputs.commit_short_id }}
       image_name: ${{ steps.resolve_build_image.outputs.image_name }}
       container_name: ${{ steps.resolve_build_image.outputs.container_name }}
+      trivy_send_mail: ${{ steps.build.outputs.trivy_send_mail }}
+      trivy_mail_artifact: ${{ steps.build.outputs.trivy_mail_artifact }}
+      commit_author_email: ${{ steps.build.outputs.commit_author_email }}
     steps:
       - name: Build, scan, and publish image
         id: build
@@ -61,9 +64,6 @@ jobs:
           docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
           docker_hub_access_token: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
           trivy_server: ${{ secrets.TRIVY_SERVER }}
-          mail_username: ${{ vars.MAIL_USERNAME }}
-          mail_password: ${{ secrets.MAIL_PASSWORD }}
-          default_mail_recipients: ${{ vars.DEFAULT_MAIL_RECIPIENTS }}
       - name: Resolve built image reference
         id: resolve_build_image
         shell: bash
@@ -77,6 +77,23 @@ jobs:
           echo "image_name=${image_name}" >> "${GITHUB_OUTPUT}"
           echo "container_name=${image_name}" >> "${GITHUB_OUTPUT}"
           echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
+
+  notify_trivy:
+    name: Send Trivy report
+    needs: build
+    if: always() && needs.build.outputs.trivy_send_mail == 'true'
+    runs-on: ubuntu-dind
+    permissions:
+      actions: read
+    steps:
+      - name: Mail completed Trivy report
+        uses: svtechnmaa/.github/actions/trivy-mail@main
+        with:
+          artifact_name: ${{ needs.build.outputs.trivy_mail_artifact }}
+          mail_username: ${{ vars.MAIL_USERNAME }}
+          mail_password: ${{ secrets.MAIL_PASSWORD }}
+          mail_receivers: ${{ needs.build.outputs.commit_author_email }},${{ vars.DEFAULT_MAIL_RECIPIENTS }}
+          it_team_email: ${{ vars.IT_TEAM_EMAIL }}
 
   test:
     name: Test image
@@ -247,6 +264,7 @@ jobs:
       - build
       - test
       - release
+      - notify_trivy
     runs-on: ubuntu-dind
     steps:
       - name: Check job results

@@ -1,0 +1,58 @@
+name: Trivy Report for All Scans
+description: Create one Summary and prepare one email from all Dockerfile and image scans in this workflow.
+
+inputs:
+  report_dir:
+    description: Directory containing collected scan folders; defaults to this run's runner temp directory.
+    required: false
+    default: ""
+
+outputs:
+  finding_count:
+    description: Total findings across all collected scans.
+    value: ${{ steps.report.outputs.finding_count }}
+  scan_count:
+    description: Number of collected scans.
+    value: ${{ steps.report.outputs.scan_count }}
+  gate_failed:
+    description: Whether a scan failed or non-ignored findings were found.
+    value: ${{ steps.report.outputs.gate_failed }}
+  send_mail:
+    description: Whether findings or scan failures require an email.
+    value: ${{ steps.report.outputs.send_mail }}
+  artifact_name:
+    description: Mail files artifact name when findings or scan errors require an email.
+    value: ${{ steps.report.outputs.artifact_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate one Trivy report
+      id: report
+      shell: bash
+      env:
+        REPORT_DIR: ${{ inputs.report_dir }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: node "$ACTION_PATH/generate-report.js"
+
+    - name: Save mail for downstream job
+      if: steps.report.outputs.send_mail == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.report.outputs.artifact_name }}
+        path: |
+          trivy-mail.txt
+          trivy-mail.html
+          trivy-mail-details.json
+        if-no-files-found: error
+
+    - name: Evaluate Trivy scan results
+      if: always()
+      shell: bash
+      env:
+        GATE_FAILED: ${{ steps.report.outputs.gate_failed }}
+      run: |
+        if [ "$GATE_FAILED" = "true" ]; then
+          echo "Trivy scans contain blocking findings or scan failures."
+          exit 1
+        fi

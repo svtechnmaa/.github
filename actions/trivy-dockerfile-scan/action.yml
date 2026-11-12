@@ -1,0 +1,84 @@
+name: Trivy Dockerfile Scan
+description: Scan a Dockerfile build context and collect its Trivy results for a later report.
+
+inputs:
+  dockerfile_path:
+    description: "Path to the Dockerfile to scan"
+    required: false
+    default: "./Dockerfile"
+  trivy_server:
+    description: "Trivy server URL (if using server mode)"
+    required: false
+    default: ""
+  ignore_finding:
+    description: "Pass the finding policy to trivy-report. Set to true to report findings without failing the job."
+    required: false
+    default: "false"
+  commit_author_name:
+    description: "Name of the commit author to include in the collected scan metadata"
+    required: true
+  commit_id:
+    description: "Git commit ID associated with this scan"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Scan Dockerfile build context
+      id: scan_dockerfile
+      shell: bash
+      env:
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+        TRIVY_SERVER: ${{ inputs.trivy_server }}
+      run: |
+        SCAN_PATH="$(dirname "$DOCKERFILE_PATH")"
+        rm -f trivy-report.json
+        echo "🔍 Scanning Dockerfile build context: $SCAN_PATH"
+        echo "Dockerfile analyzer target: $DOCKERFILE_PATH"
+        echo "DOCKERFILE_SCAN_PATH=$SCAN_PATH" >> "$GITHUB_ENV"
+
+        if [ -n "$TRIVY_SERVER" ] && curl -sS --fail "${TRIVY_SERVER%/}/healthz" > /dev/null; then
+          echo "✅ Trivy server is UP"
+          trivy fs \
+            --server "$TRIVY_SERVER" \
+            --scanners vuln,secret,misconfig \
+            --misconfig-scanners dockerfile \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-report.json \
+            --exit-code 0 \
+            "$SCAN_PATH"
+        else
+          echo "⚠️ Trivy server is unavailable. Falling back to local scan."
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --misconfig-scanners dockerfile \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-report.json \
+            --exit-code 0 \
+            "$SCAN_PATH"
+        fi
+      continue-on-error: true
+
+    - name: Collect Dockerfile scan result
+      if: always()
+      shell: bash
+      env:
+        SCAN_TARGET: ${{ inputs.dockerfile_path }}
+        SCAN_COMMIT: ${{ inputs.commit_id }}
+        SCAN_AUTHOR: ${{ inputs.commit_author_name }}
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
+      run: |
+        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$report_dir"
+        scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+        if [ -f trivy-report.json ]; then cp trivy-report.json "$scan_result_dir/report.json"; fi
+        if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-report.json ] && jq -e '.Results | type == "array"' trivy-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
+        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
