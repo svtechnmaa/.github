@@ -267,6 +267,7 @@ runs:
       uses: svtechnmaa/.github/actions/trivy-dockerfile-scan@main
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
+        trivy_server: ${{ inputs.trivy_server }}
         ignore_finding: ${{ inputs.ignore_finding }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
