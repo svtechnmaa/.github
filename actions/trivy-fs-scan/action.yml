@@ -1,0 +1,187 @@
+name: Trivy Filesystem and Image Scan
+description: Scan files changed in a pull request and optionally scan container images. Collect results for trivy-report.
+
+inputs:
+  trivy-server:
+    description: Trivy server URL. The action falls back to local scanning if unavailable.
+    required: false
+    default: ""
+  severity:
+    description: Comma-separated severity levels to scan.
+    required: false
+    default: CRITICAL,HIGH
+  scanners:
+    description: Comma-separated Trivy scanners to enable.
+    required: false
+    default: secret,misconfig,vuln
+  enable-image-scan:
+    description: Also scan the images in image-ref.
+    required: false
+    default: "false"
+  image-ref:
+    description: Space-separated image references. Required when enable-image-scan is true.
+    required: false
+    default: ""
+  ignore_finding:
+    description: Tell trivy-report to report findings without failing the job when true.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Update Helm dependencies
+      shell: bash
+      run: |
+        find . -name "Chart.yaml" -not -path "*/.git/*" -print0 | while IFS= read -r -d '' file; do
+          helm dependency update "$(dirname "$file")" 2>/dev/null || true
+        done
+      continue-on-error: true
+
+    - name: Prepare changed files
+      id: prepare_scope
+      shell: bash
+      run: |
+        set -euo pipefail
+        base_sha="${{ github.event.pull_request.base.sha || github.event.before }}"
+        head_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+        scope_dir=".trivy-scope"
+        changed_files="changed-files.txt"
+
+        rm -rf "$scope_dir"
+        rm -f trivy-fs.json
+        mkdir -p "$scope_dir"
+        echo "Scanning changed files in range: ${base_sha}...${head_sha}"
+        if ! git diff --name-only --diff-filter=ACMR "${base_sha}...${head_sha}" > "$changed_files"; then
+          echo "::error::Unable to diff ${base_sha}...${head_sha}. Configure actions/checkout with fetch-depth: 0."
+          exit 1
+        fi
+
+        copied_count=0
+        while IFS= read -r file; do
+          [ -n "$file" ] || continue
+          [ -f "$file" ] || continue
+          mkdir -p "$scope_dir/$(dirname "$file")"
+          cp -- "$file" "$scope_dir/$file"
+          copied_count=$((copied_count + 1))
+        done < "$changed_files"
+
+        if [ "$copied_count" -eq 0 ]; then
+          echo '{"SchemaVersion":2,"Results":[]}' > trivy-fs.json
+          echo "has_scope=false" >> "$GITHUB_OUTPUT"
+          echo "No changed files are available to scan."
+        else
+          echo "has_scope=true" >> "$GITHUB_OUTPUT"
+          find "$scope_dir" -type f -print
+        fi
+
+    - name: Check Trivy server
+      id: trivy_mode
+      if: steps.prepare_scope.outputs.has_scope == 'true' || inputs.enable-image-scan == 'true'
+      shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+      run: |
+        if [ -n "$TRIVY_SERVER" ] && curl -sS --fail --max-time 5 "${TRIVY_SERVER%/}/healthz" >/dev/null; then
+          echo "use_server=true" >> "$GITHUB_OUTPUT"
+        else
+          [ -z "$TRIVY_SERVER" ] || echo "Trivy server is unavailable; using local scans."
+          echo "use_server=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Scan changed files
+      id: scan_files
+      if: steps.prepare_scope.outputs.has_scope == 'true'
+      shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SCANNERS: ${{ inputs.scanners }}
+        TRIVY_SEVERITY: ${{ inputs.severity }}
+        USE_SERVER: ${{ steps.trivy_mode.outputs.use_server }}
+      run: |
+        scan_fs() {
+          trivy fs "$@" \
+            --scanners "$TRIVY_SCANNERS" \
+            --severity "$TRIVY_SEVERITY" \
+            --ignore-unfixed \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json --output trivy-fs.json --exit-code 0 .trivy-scope
+        }
+        if [ "$USE_SERVER" = "true" ]; then
+          if ! scan_fs --server "$TRIVY_SERVER"; then
+            echo "Trivy server scan failed; retrying locally."
+            rm -f trivy-fs.json
+            scan_fs
+          fi
+        else
+          scan_fs
+        fi
+      continue-on-error: true
+
+    - name: Collect filesystem scan result
+      if: always() && steps.prepare_scope.outcome == 'success'
+      shell: bash
+      env:
+        HAS_SCOPE: ${{ steps.prepare_scope.outputs.has_scope }}
+        SCAN_OUTCOME: ${{ steps.scan_files.outcome }}
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        SCAN_AUTHOR: ${{ github.actor }}
+      run: |
+        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$report_dir"
+        scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+        if [ ! -s trivy-fs.json ]; then echo '{"SchemaVersion":2,"Results":[]}' > trivy-fs.json; fi
+        cp trivy-fs.json "$scan_result_dir/report.json"
+        scan_ok=false
+        if [ "$HAS_SCOPE" != "true" ] || { [ "$SCAN_OUTCOME" = "success" ] && jq -e '.Results | type == "array"' trivy-fs.json >/dev/null 2>&1; }; then scan_ok=true; fi
+        jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
+
+    - name: Scan container images
+      id: scan_images
+      if: inputs.enable-image-scan == 'true'
+      shell: bash
+      env:
+        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SCANNERS: ${{ inputs.scanners }}
+        TRIVY_SEVERITY: ${{ inputs.severity }}
+        TRIVY_IMAGE_REFS: ${{ inputs.image-ref }}
+        USE_SERVER: ${{ steps.trivy_mode.outputs.use_server }}
+        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        SCAN_AUTHOR: ${{ github.actor }}
+      run: |
+        set -uo pipefail
+        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$report_dir"
+        read -r -a image_refs <<< "$TRIVY_IMAGE_REFS"
+        if [ "${#image_refs[@]}" -eq 0 ]; then
+          image_refs=("")
+        fi
+        failures=0
+        for image_ref in "${image_refs[@]}"; do
+          scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
+          report_file="$scan_result_dir/report.json"
+          scan_ok=false
+          if [ -n "$image_ref" ]; then
+            scan_image() {
+              trivy image "$@" --scanners "$TRIVY_SCANNERS" --severity "$TRIVY_SEVERITY" \
+                --ignore-unfixed --format json --output "$report_file" --exit-code 0 "$image_ref"
+            }
+            if [ "$USE_SERVER" = "true" ] && scan_image --server "$TRIVY_SERVER" && jq -e '.Results | type == "array"' "$report_file" >/dev/null 2>&1; then
+              scan_ok=true
+            else
+              rm -f "$report_file"
+              if scan_image && jq -e '.Results | type == "array"' "$report_file" >/dev/null 2>&1; then scan_ok=true; fi
+            fi
+          fi
+          if [ "$scan_ok" != "true" ]; then
+            echo '{"SchemaVersion":2,"Results":[]}' > "$report_file"
+            failures=$((failures + 1))
+          fi
+          jq -n --arg kind image --arg target "${image_ref:-image-ref missing}" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
+            '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
+        done
+        [ "$failures" -eq 0 ] || exit 1
+      continue-on-error: true
