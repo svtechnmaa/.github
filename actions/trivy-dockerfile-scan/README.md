@@ -8,7 +8,7 @@ Scans a Dockerfile's build context for HIGH and CRITICAL vulnerabilities, secret
 | --- | --- | --- | --- |
 | `dockerfile_path` | No | `./Dockerfile` | Dockerfile to scan; its directory is the build context. |
 | `trivy_server` | No | Empty | Trivy server URL. Falls back to local scanning if unavailable. |
-| `ignore_finding` | No | `false` | Tells `trivy-report` whether findings from this scan should fail the job. |
+| `ignore_finding` | No | `false` | Allows vulnerabilities and misconfigurations when `true`. Secrets and scan errors always fail. |
 | `commit_author_name` | Yes | — | Author name recorded with this scan. |
 | `commit_id` | Yes | — | Commit ID recorded with this scan. |
 

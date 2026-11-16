@@ -23,7 +23,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: Tell trivy-report to report findings without failing the job when true.
+    description: Allow vulnerabilities and misconfigurations when true. Secrets and scan errors always fail.
     required: false
     default: "false"
 

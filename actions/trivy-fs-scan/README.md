@@ -11,7 +11,7 @@ Scans files changed in the pull request and, optionally, one or more container i
 | `scanners` | No | `secret,misconfig,vuln` | Comma-separated Trivy scanners. |
 | `enable-image-scan` | No | `false` | Also scan container images when set to `true`. |
 | `image-ref` | No | Empty | Space-separated image references; required when image scanning is enabled. |
-| `ignore_finding` | No | `false` | Passes the finding policy to `trivy-report`. Findings remain visible when set to `true`, but do not fail the job. |
+| `ignore_finding` | No | `false` | Passes the finding policy to `trivy-report`. When `true`, vulnerabilities and misconfigurations remain visible but do not fail the job. Secrets and scan errors always fail. |
 
 ## Results
 

@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: "Pass the finding policy to trivy-report. Set to true to report findings without failing the job."
+    description: "Pass the finding policy to trivy-report. When true, allow vulnerabilities and misconfigurations. Secrets and scan errors always fail."
     required: false
     default: "false"
   commit_author_name:

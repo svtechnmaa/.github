@@ -18,7 +18,7 @@ Call this action once after the Trivy scan actions. It reads their collected res
 | `send_mail` | `true` if findings or scan errors require an email. |
 | `artifact_name` | Artifact containing the email files when `send_mail` is true. |
 
-Findings from scans marked `ignore_finding: true` still appear in the Summary and email but do not fail the job. Scan errors always fail the job. Clean scans produce a Summary but no email artifact.
+With `ignore_finding: true`, vulnerabilities and misconfigurations remain visible in the Summary and email but do not fail the job. Secrets and scan errors always fail the job. Clean scans produce a Summary but no email artifact.
 
 ## Same-job scans
 

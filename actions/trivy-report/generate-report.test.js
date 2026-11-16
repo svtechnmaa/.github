@@ -47,16 +47,16 @@ const secret = { RuleID: 'secret-rule', Severity: 'HIGH', Title: 'Credential', S
 
 test('combines repeated scans and records secret count for downstream mail', () => {
   const data = run([
-    { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { Results: [{ Target: 'app:first', Secrets: [secret] }] } },
-    { meta: { kind: 'image', target: 'app:second', ignore_finding: true, scan_ok: true }, report: { Results: [] } },
+    { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'app:first', Secrets: [secret] }] } },
+    { meta: { kind: 'image', target: 'app:second', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [] } },
   ]);
   assert.equal(data.values.scan_count, '3');
   assert.equal(data.values.finding_count, '2');
-  assert.equal(data.values.gate_failed, 'false');
+  assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
   assert.deepEqual(data.mailMetadata, {
-    subject: '[TRIVY][FINDINGS FOUND] 1 vulns, 1 secrets — svtechnmaa/svtech_report',
+    subject: '[TRIVY][ACTION REQUIRED] 1 vulns, 1 secrets — svtechnmaa/svtech_report',
     secret_count: 1,
   });
   assert.match(data.summary, /## 1\. Summary/);
@@ -69,18 +69,21 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
-  assert.match(data.mailMetadata.subject, /\[TRIVY\]\[FINDINGS FOUND\]/);
+  assert.match(data.mailMetadata.subject, /\[TRIVY\]\[ACTION REQUIRED\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
-  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> means these findings do not fail the build/);
+  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities and misconfigurations/);
+  assert.match(data.summary, /Blocking secrets/);
+  assert.match(data.mail, /BLOCKING SECRETS/);
+  assert.match(data.htmlMail, /BLOCKING SECRETS/);
   assert.doesNotMatch(data.htmlMail, /IGNORE_FINDING/);
   assert.match(data.htmlMail, /OPEN FULL GITHUB SUMMARY/);
   assert.doesNotMatch(data.htmlMail, /secret-rule/);
 });
 
-test('findings block only scans without ignore_finding', () => {
+test('vulnerabilities block scans without ignore_finding', () => {
   const data = run([
-    { meta: { kind: 'dockerfile', target: './Dockerfile', ignore_finding: true, scan_ok: true }, report: { Results: [{ Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'image', target: 'app:latest', ignore_finding: false, scan_ok: true }, report: { Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'dockerfile', target: './Dockerfile', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'app:latest', ignore_finding: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.finding_count, '2');
@@ -96,6 +99,36 @@ test('scan errors remain blocking even when ignore_finding is true', () => {
   assert.match(data.htmlMail, /SCAN FAILED/);
   assert.match(data.mail, /SCAN ERRORS means a scan did not finish or produced no readable report/);
   assert.match(data.htmlMail, /<strong>SCAN ERRORS<\/strong> means a scan did not finish/);
+});
+
+test('allowed vulnerabilities and misconfigurations do not block merging', () => {
+  const data = run([
+    { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+  ]);
+  assert.equal(data.values.gate_failed, 'false');
+  assert.equal(data.values.send_mail, 'true');
+  assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
+  assert.match(data.summary, /Findings allowed/);
+  assert.match(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
+});
+
+test('secrets always block even in an allowed scan, with or without other findings', () => {
+  for (const extra of [{}, { Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }]) {
+    const data = run([
+      { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Secrets: [{ ...secret, Match: 'PRIVATE_SECRET_VALUE' }], ...extra }] } },
+    ]);
+    assert.equal(data.values.gate_failed, 'true');
+    assert.equal(data.values.send_mail, 'true');
+    assert.equal(data.mailMetadata.secret_count, 1);
+    assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
+    assert.match(data.summary, /Blocking secrets/);
+    assert.match(data.mail, /BLOCKING SECRETS/);
+    assert.match(data.htmlMail, /BLOCKING SECRETS/);
+    assert.doesNotMatch(data.summary, /Findings allowed/);
+    assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
+    assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
+    for (const output of [data.summary, data.mail, data.htmlMail]) assert.doesNotMatch(output, /PRIVATE_SECRET_VALUE/);
+  }
 });
 
 test('missing results do not produce a clean report', () => {
