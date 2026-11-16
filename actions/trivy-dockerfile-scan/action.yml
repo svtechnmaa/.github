@@ -79,6 +79,6 @@ runs:
         mkdir -p "$report_dir"
         scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
         if [ -f trivy-report.json ]; then cp trivy-report.json "$scan_result_dir/report.json"; fi
-        if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-report.json ] && jq -e 'has("Results") and ((.Results == null) or (.Results | type == "array"))' trivy-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
+        if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-report.json ] && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' trivy-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
         jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
           '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"

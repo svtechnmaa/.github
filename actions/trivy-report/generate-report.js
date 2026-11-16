@@ -65,13 +65,18 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
   const vulnerabilities = findings(report, 'Vulnerabilities');
   const secrets = findings(report, 'Secrets');
   const misconfigurations = findings(report, 'Misconfigurations');
+  const validReport = report !== null
+    && typeof report === 'object'
+    && !Array.isArray(report)
+    && Object.prototype.hasOwnProperty.call(report, 'SchemaVersion')
+    && (report.Results === undefined || report.Results === null || Array.isArray(report.Results));
   return {
     kind: meta.kind || 'unknown',
     target: meta.target || 'unknown',
     commitId: meta.commit_id || '',
     commitAuthor: meta.commit_author || '',
     ignoreFinding: meta.ignore_finding === true,
-    scanOk: meta.scan_ok === true && report !== null && (report.Results === null || Array.isArray(report.Results)),
+    scanOk: meta.scan_ok === true && validReport,
     vulnerabilities, secrets, misconfigurations,
   };
 });
