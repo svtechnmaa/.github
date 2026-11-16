@@ -134,7 +134,11 @@ runs:
         if [ ! -s trivy-fs.json ]; then echo '{"SchemaVersion":2,"Results":[]}' > trivy-fs.json; fi
         cp trivy-fs.json "$scan_result_dir/report.json"
         scan_ok=false
-        if [ "$HAS_SCOPE" != "true" ] || { [ "$SCAN_OUTCOME" = "success" ] && jq -e '.Results | type == "array"' trivy-fs.json >/dev/null 2>&1; }; then scan_ok=true; fi
+        if [ "$HAS_SCOPE" != "true" ]; then
+          scan_ok=true
+        elif [ "$SCAN_OUTCOME" = "success" ] && jq -e 'has("Results") and ((.Results == null) or (.Results | type == "array"))' trivy-fs.json >/dev/null 2>&1; then
+          scan_ok=true
+        fi
         jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
           '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
 
@@ -169,11 +173,11 @@ runs:
               trivy image "$@" --scanners "$TRIVY_SCANNERS" --severity "$TRIVY_SEVERITY" \
                 --ignore-unfixed --format json --output "$report_file" --exit-code 0 "$image_ref"
             }
-            if [ "$USE_SERVER" = "true" ] && scan_image --server "$TRIVY_SERVER" && jq -e '.Results | type == "array"' "$report_file" >/dev/null 2>&1; then
+            if [ "$USE_SERVER" = "true" ] && scan_image --server "$TRIVY_SERVER" && jq -e 'has("Results") and ((.Results == null) or (.Results | type == "array"))' "$report_file" >/dev/null 2>&1; then
               scan_ok=true
             else
               rm -f "$report_file"
-              if scan_image && jq -e '.Results | type == "array"' "$report_file" >/dev/null 2>&1; then scan_ok=true; fi
+              if scan_image && jq -e 'has("Results") and ((.Results == null) or (.Results | type == "array"))' "$report_file" >/dev/null 2>&1; then scan_ok=true; fi
             fi
           fi
           if [ "$scan_ok" != "true" ]; then

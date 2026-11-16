@@ -71,7 +71,7 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
     commitId: meta.commit_id || '',
     commitAuthor: meta.commit_author || '',
     ignoreFinding: meta.ignore_finding === true,
-    scanOk: meta.scan_ok === true && report !== null && Array.isArray(report.Results),
+    scanOk: meta.scan_ok === true && report !== null && (report.Results === null || Array.isArray(report.Results)),
     vulnerabilities, secrets, misconfigurations,
   };
 });
