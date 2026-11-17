@@ -1,5 +1,5 @@
 name: 'Check job results'
-description: 'Check job results and fail when any job failed or was cancelled'
+description: 'Check job results; accept only explicitly marked Trivy vulnerability bypass failures, and fail for other failures or cancellations'
 inputs:
   jobs:
     description: 'JSON representation of the needs context'
@@ -10,27 +10,7 @@ runs:
   - name: Check job results
     shell: bash
     run: |
-      failed=false
-
-      while IFS=$'\t' read -r job result; do
-        echo "$job: $result"
-
-        case "$result" in
-          success|skipped)
-            ;;
-          failure|cancelled)
-            failed=true
-            ;;
-          *)
-            echo "Unknown result for $job: $result"
-            failed=true
-            ;;
-        esac
-      done < <(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<< "$JOBS")
-
-      if [[ "$failed" == "true" ]]; then
-        echo "One or more jobs failed or were cancelled."
-        exit 1
-      fi
+      bash "$ACTION_PATH/check-results.sh"
     env:
       JOBS: ${{ inputs.jobs }}
+      ACTION_PATH: ${{ github.action_path }}
