@@ -20,6 +20,16 @@ Call this action once after the Trivy scan actions. It reads their collected res
 
 With `ignore_finding: true`, vulnerabilities remain visible in the Summary and email but do not fail the job. Misconfigurations, secrets, and scan errors always fail the job. Clean scans produce a Summary but no email artifact.
 
+The Summary and email distinguish allowed and blocking vulnerabilities, show each
+target's policy, and label every finding's gate decision in the detailed Summary.
+The scan gate can remain blocked by misconfigurations or other findings even when
+some vulnerabilities are allowed. The email subject includes misconfiguration
+counts as well as vulnerability and secret counts.
+
+These are scan decisions, not confirmation that the build was bypassed. When a
+workflow uses `trivy-check-scan-status`, its final step appends the actual build
+bypass decision to the GitHub Summary after all required build work finishes.
+
 ## Same-job scans
 
 When scans and this action run in the same job, no `report_dir` input is needed:

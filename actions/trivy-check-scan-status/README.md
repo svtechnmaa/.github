@@ -47,5 +47,8 @@ failure. `check_job_results` must use the updated action and depend on every job
 whose failures should block merging. The red build job must not itself be a
 required successful check; use the final aggregate check for that policy.
 
-This action does not alter the Summary or send email. Required security workflows
-do not need to call it and keep their existing gate behavior.
+This action appends a final build status to the GitHub Summary: bypass applied,
+no bypass because of blocking results or another failure, skipped scan, or clean
+scan. It does not send email; the earlier report/email describes scan policy,
+while this final section confirms whether the build actually received a bypass.
+Required security workflows do not need to call it and keep their existing gate behavior.

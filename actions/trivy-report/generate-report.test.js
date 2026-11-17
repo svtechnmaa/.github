@@ -56,7 +56,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
   assert.deepEqual(data.mailMetadata, {
-    subject: '[TRIVY][ACTION REQUIRED] 1 vulns, 1 secrets — svtechnmaa/svtech_report',
+    subject: '[TRIVY][ACTION REQUIRED] 1 vulns, 0 misconfigs, 1 secrets — svtechnmaa/svtech_report',
     secret_count: 1,
   });
   assert.match(data.summary, /## 1\. Summary/);
@@ -187,6 +187,36 @@ test('invalid reports remain blocking even when scan metadata permits vulnerabil
     assert.equal(data.values.send_mail, 'true');
     assert.match(data.mailMetadata.subject, /\[SCAN FAILED\]/);
   }
+});
+
+test('mixed scan reports distinguish allowed vulnerabilities from blocking misconfigurations', () => {
+  const data = run([
+    { meta: { kind: 'filesystem', target: 'backend', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+    { meta: { kind: 'image', target: 'frontend', ignore_finding: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+  ]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
+  assert.match(data.summary, /\| 🛡️ Vulnerabilities \(HIGH, CRITICAL\) \| 2 \| 1 \| 1 \|/);
+  assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
+  assert.match(data.summary, /\| backend \| true \| 1 \(1 allowed, 0 blocking\)/);
+  assert.match(data.summary, /\| frontend \| false \| 1 \(0 allowed, 1 blocking\)/);
+  assert.match(data.summary, /ALLOWED — ignore_finding=true/);
+  assert.match(data.summary, /❌ BLOCKING/);
+  assert.match(data.summary, /❌ ALWAYS BLOCKING/);
+  assert.match(data.mail, /ALLOWED VULNERABILITIES: 1/);
+  assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
+  assert.match(data.htmlMail, /1 allowed · 1 blocking/);
+  assert.match(data.htmlMail, /SCAN GATE: BLOCKED/);
+  assert.match(data.mailMetadata.subject, /1 misconfigs/);
+});
+
+test('scan failures cannot present their vulnerability results as allowed', () => {
+  const data = run([
+    { meta: { kind: 'image', target: 'backend', ignore_finding: true, scan_ok: false }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+  ]);
+  assert.match(data.mail, /ALLOWED VULNERABILITIES: 0/);
+  assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
+  assert.doesNotMatch(data.summary, /ALLOWED — ignore_finding=true/);
 });
 
 test('missing results do not produce a clean report', () => {

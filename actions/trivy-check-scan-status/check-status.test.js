@@ -23,11 +23,11 @@ function finalize(env) {
     const output = path.join(root, 'output');
     const result = execute(finalizeScript, {
       JOB_STATUS: 'success', REPORT_OUTCOME: 'success', FINDING_COUNT: '1', GATE_FAILED: 'false',
-      ...env, GITHUB_OUTPUT: output.replace(/\\/g, '/'),
+      ...env, GITHUB_OUTPUT: output.replace(/\\/g, '/'), GITHUB_STEP_SUMMARY: path.join(root, 'summary').replace(/\\/g, '/'),
     });
     const lines = fs.readFileSync(output, 'utf8').trim().split('\n');
     const outputs = Object.fromEntries(lines.map((line) => line.split('=')));
-    return { ...result, bypassed: outputs.scan_bypassed };
+    return { ...result, bypassed: outputs.scan_bypassed, summary: fs.readFileSync(path.join(root, 'summary'), 'utf8') };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -41,6 +41,7 @@ test('only an otherwise successful job with allowed findings is intentionally fa
   const result = finalize({});
   assert.equal(result.code, 1);
   assert.equal(result.bypassed, 'true');
+  assert.match(result.summary, /BUILD BYPASS APPLIED — ALLOWED VULNERABILITIES ONLY/);
   assert.equal(check({ build: { result: 'failure', outputs: { scan_bypassed: result.bypassed } } }).code, 0);
 });
 
@@ -49,6 +50,7 @@ test('clean and deliberately skipped reports do not need a bypass', () => {
     const result = finalize(env);
     assert.equal(result.code, 0);
     assert.equal(result.bypassed, 'false');
+    assert.match(result.summary, /NO BUILD BYPASS/);
   }
 });
 
