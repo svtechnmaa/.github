@@ -23,7 +23,7 @@ inputs:
     required: false
     default: ""
   ignore_finding:
-    description: Allow vulnerabilities and misconfigurations when true. Secrets and scan errors always fail.
+    description: Allow vulnerabilities when true. Misconfigurations, secrets, and scan errors always fail.
     required: false
     default: "false"
 

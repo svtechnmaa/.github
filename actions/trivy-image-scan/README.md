@@ -9,7 +9,7 @@ Scans a Docker image for HIGH and CRITICAL vulnerabilities and secrets. The acti
 | `image_name` | Yes | — | Image name to scan. |
 | `image_tag` | No | `latest` | Image tag to scan. |
 | `trivy_server` | No | Empty | Trivy server URL. Falls back to local scanning if unavailable. |
-| `ignore_finding` | No | `false` | Allows vulnerabilities and misconfigurations when `true`. Secrets and scan errors always fail. |
+| `ignore_finding` | No | `false` | Allows vulnerabilities when `true`. Misconfigurations, secrets, and scan errors always fail. |
 | `commit_author_name` | Yes | — | Author name recorded with this scan. |
 | `commit_id` | Yes | — | Commit ID recorded with this scan. |
 

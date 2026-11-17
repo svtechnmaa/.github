@@ -17,8 +17,8 @@ function findings(report, key) {
 }
 
 function blocksMerge(scan) {
-  return !scan.scanOk || scan.secrets.length > 0
-    || (!scan.ignoreFinding && scan.vulnerabilities.length + scan.misconfigurations.length > 0);
+  return !scan.scanOk || scan.secrets.length > 0 || scan.misconfigurations.length > 0
+    || (!scan.ignoreFinding && scan.vulnerabilities.length > 0);
 }
 
 function clean(value) {
@@ -99,7 +99,7 @@ const status = totals.failures ? '⚠️ Scan failed' : totalFindings ? '❌ Iss
 const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS FOUND' : 'CLEAN';
 const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
 const cleanScans = scans.length - highlightedScans.length;
-const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.ignoreFinding && scan.vulnerabilities.length + scan.misconfigurations.length > 0);
+const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.ignoreFinding && scan.vulnerabilities.length > 0);
 const commitIds = [...new Set(scans.map((scan) => scan.commitId).filter((value) => /^[0-9a-f]{7,40}$/i.test(value)))];
 const commitId = commitIds.length === 1 ? commitIds[0] : '';
 const commitAuthor = [...new Set(scans.map((scan) => scan.commitAuthor).filter(Boolean))].join(', ');
@@ -128,7 +128,7 @@ const summary = [
   '',
   markdownTable(['Type', 'Target', 'Vulnerabilities', 'Secrets', 'Misconfigurations', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`ignore_finding: true`)';
+    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : scan.misconfigurations.length > 0 ? '❌ Blocking misconfigurations' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`ignore_finding: true`)';
     return [markdown(scan.kind), markdown(scan.target), scan.vulnerabilities.length, scan.secrets.length, scan.misconfigurations.length, result];
   })),
 ];
@@ -168,7 +168,7 @@ if (totalFindings > 0 || totals.failures > 0) {
   if (totals.misconfigurations) actions.push('Apply the reported **Resolution** to the affected file and line.');
   summary.push(...actions.map((action, index) => `${index + 1}. ${action}`), '');
   if (hasNonBlockingFindings) {
-    summary.push('**Note:** With `ignore_finding: true`, vulnerabilities and misconfigurations are reported but do not fail the job. Secrets and scan failures always fail the job.', '');
+    summary.push('**Note:** With `ignore_finding: true`, vulnerabilities are reported but do not fail the job. Misconfigurations, secrets, and scan failures always fail the job.', '');
   }
 }
 if (totals.secrets) summary.push('**Secrets always block merging, including when `ignore_finding: true`.**', '');
@@ -189,12 +189,12 @@ const body = [
   '',
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
-    const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
+    const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
     return `${scan.kind.toUpperCase()}: ${scan.target} — ${scan.vulnerabilities.length} vulnerabilities, ${scan.secrets.length} secrets, ${scan.misconfigurations.length} misconfigurations (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
   ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
-  ...(hasNonBlockingFindings ? ['', 'NOT BLOCKING applies only to allowed vulnerabilities and misconfigurations. They still need review and remediation.'] : []),
+  ...(hasNonBlockingFindings ? ['', 'NOT BLOCKING applies only to allowed vulnerabilities. They still need review and remediation.'] : []),
   ...(totals.secrets ? ['', 'Secrets always block merging, even when other findings are allowed.'] : []),
   '',
   'Open the workflow run Summary for CVEs, affected packages, fixed versions, files, and remediation details.',
@@ -210,7 +210,7 @@ const cards = [
   ['SCAN ERRORS', totals.failures],
 ].map(([label, count]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div></td>`).join('');
 const rows = highlightedScans.map((scan) => {
-  const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
+  const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
   return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.vulnerabilities.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
 }).join('');
 const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
@@ -220,7 +220,7 @@ const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif
 ${totals.failures ? '<p style="padding:12px;background:#ffebe9"><strong>SCAN ERRORS</strong> means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.</p>' : ''}
 <h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
 ${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px">TARGET</th><th>VULNS</th><th>SECRETS</th><th>MISCONFIGS</th><th>STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
-${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> applies only to allowed vulnerabilities and misconfigurations. They still need review and remediation.</p>' : ''}
+${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> applies only to allowed vulnerabilities. They still need review and remediation.</p>' : ''}
 ${totals.secrets ? '<p style="padding:12px;background:#ffebe9"><strong>Secrets always block merging</strong>, even when other findings are allowed.</p>' : ''}
 <p style="margin-top:28px"><a href="${html(runUrl)}" style="display:inline-block;padding:12px 18px;background:#0969da;color:#fff;text-decoration:none;font-weight:700;border-radius:6px">OPEN FULL GITHUB SUMMARY</a></p>
 <p style="font-size:13px;color:#57606a">The Summary includes CVEs, affected packages, fixed versions, files, and remediation details. Secret values are not included in this email.</p>

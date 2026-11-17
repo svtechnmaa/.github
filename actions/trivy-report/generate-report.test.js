@@ -71,7 +71,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.htmlMail, /<strong>3 scans/);
   assert.match(data.mailMetadata.subject, /\[TRIVY\]\[ACTION REQUIRED\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
-  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities and misconfigurations/);
+  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities/);
   assert.match(data.summary, /Blocking secrets/);
   assert.match(data.mail, /BLOCKING SECRETS/);
   assert.match(data.htmlMail, /BLOCKING SECRETS/);
@@ -101,9 +101,9 @@ test('scan errors remain blocking even when ignore_finding is true', () => {
   assert.match(data.htmlMail, /<strong>SCAN ERRORS<\/strong> means a scan did not finish/);
 });
 
-test('allowed vulnerabilities and misconfigurations do not block merging', () => {
+test('allowed vulnerabilities do not block merging', () => {
   const data = run([
-    { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+    { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
@@ -111,6 +111,42 @@ test('allowed vulnerabilities and misconfigurations do not block merging', () =>
   assert.match(data.summary, /Findings allowed/);
   assert.match(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
 });
+
+for (const kind of ['filesystem', 'dockerfile', 'image']) {
+  for (const ignoreFinding of [false, true]) {
+    for (let combination = 0; combination < 8; combination++) {
+      const hasVulnerability = Boolean(combination & 1);
+      const hasMisconfiguration = Boolean(combination & 2);
+      const hasSecret = Boolean(combination & 4);
+      test(`${kind}: ignore=${ignoreFinding}, vuln=${hasVulnerability}, misconfig=${hasMisconfiguration}, secret=${hasSecret}`, () => {
+        const data = run([{
+          meta: { kind, target: 'target', ignore_finding: ignoreFinding, scan_ok: true },
+          report: { SchemaVersion: 2, Results: [{
+            Vulnerabilities: hasVulnerability ? [vulnerability] : [],
+            Misconfigurations: hasMisconfiguration ? [{ ID: 'AVD-TEST', Severity: 'HIGH' }] : [],
+            Secrets: hasSecret ? [secret] : [],
+          }] },
+        }]);
+        const blocking = hasSecret || hasMisconfiguration || (hasVulnerability && !ignoreFinding);
+        const hasFindings = hasVulnerability || hasMisconfiguration || hasSecret;
+        assert.equal(data.values.gate_failed, String(blocking));
+        assert.equal(data.values.send_mail, String(hasFindings));
+        assert.equal(data.values.finding_count, String(Number(hasVulnerability) + Number(hasMisconfiguration) + Number(hasSecret)));
+        if (blocking) {
+          assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
+          assert.doesNotMatch(data.summary, /Findings allowed/);
+          assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
+          assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
+        } else if (hasFindings) {
+          assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
+          assert.match(data.summary, /Findings allowed/);
+        } else {
+          assert.match(data.summary, /Clean/);
+        }
+      });
+    }
+  }
+}
 
 test('secrets always block even in an allowed scan, with or without other findings', () => {
   for (const extra of [{}, { Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }]) {
@@ -128,6 +164,28 @@ test('secrets always block even in an allowed scan, with or without other findin
     assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
     assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
     for (const output of [data.summary, data.mail, data.htmlMail]) assert.doesNotMatch(output, /PRIVATE_SECRET_VALUE/);
+  }
+});
+
+test('allowed vulnerabilities in one scan cannot bypass misconfigurations in another', () => {
+  const data = run([
+    { meta: { kind: 'image', target: 'app:sha', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'dockerfile', target: 'Dockerfile', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+  ]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.equal(data.values.send_mail, 'true');
+  assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
+  assert.match(data.summary, /Blocking misconfigurations/);
+  assert.match(data.mail, /BLOCKING MISCONFIGURATIONS/);
+  assert.match(data.htmlMail, /BLOCKING MISCONFIGURATIONS/);
+});
+
+test('invalid reports remain blocking even when scan metadata permits vulnerabilities', () => {
+  for (const report of [{}, { SchemaVersion: 2, Results: 'invalid' }]) {
+    const data = run([{ meta: { kind: 'image', target: 'app:sha', ignore_finding: true, scan_ok: true }, report }]);
+    assert.equal(data.values.gate_failed, 'true');
+    assert.equal(data.values.send_mail, 'true');
+    assert.match(data.mailMetadata.subject, /\[SCAN FAILED\]/);
   }
 });
 
