@@ -76,21 +76,23 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
   } catch (_) {
     report = null;
   }
-  const vulnerabilities = findings(report, 'Vulnerabilities');
-  const secrets = findings(report, 'Secrets');
-  const misconfigurations = findings(report, 'Misconfigurations');
   const validReport = report !== null
     && typeof report === 'object'
     && !Array.isArray(report)
-    && Object.prototype.hasOwnProperty.call(report, 'SchemaVersion')
-    && (report.Results === undefined || report.Results === null || Array.isArray(report.Results));
+    && Number.isInteger(report.SchemaVersion) && report.SchemaVersion > 0
+    && (report.Results === undefined || report.Results === null || (Array.isArray(report.Results)
+      && report.Results.every((result) => result !== null && typeof result === 'object' && !Array.isArray(result)
+        && ['Vulnerabilities', 'Secrets', 'Misconfigurations'].every((key) => result[key] === undefined || Array.isArray(result[key])))));
+  const vulnerabilities = validReport ? findings(report, 'Vulnerabilities') : [];
+  const secrets = validReport ? findings(report, 'Secrets') : [];
+  const misconfigurations = validReport ? findings(report, 'Misconfigurations') : [];
   return {
     kind: meta.kind || 'unknown',
     target: meta.target || 'unknown',
     commitId: meta.commit_id || '',
     commitAuthor: meta.commit_author || '',
-    ignoreFinding: meta.ignore_finding === true,
-    scanOk: meta.scan_ok === true && validReport,
+    ignoreFinding: (meta.allow_vulnerabilities ?? meta.ignore_finding) === true,
+    scanOk: (meta.scan_succeeded ?? meta.scan_ok) === true && validReport,
     vulnerabilities, secrets, misconfigurations,
   };
 });
@@ -141,9 +143,9 @@ const summary = [
   '',
   '## 2. Scanned targets',
   '',
-  markdownTable(['Type', 'Target', 'ignore_finding (vuln only)', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations (blocking)', 'Result'], scans.map((scan) => {
+  markdownTable(['Type', 'Target', 'allow_vulnerabilities', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations (blocking)', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : scan.misconfigurations.length > 0 ? '❌ Blocking misconfigurations' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`ignore_finding: true`)';
+    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : scan.misconfigurations.length > 0 ? '❌ Blocking misconfigurations' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`allow_vulnerabilities: true`)';
     return [markdown(scan.kind), markdown(scan.target), String(scan.ignoreFinding), vulnerabilityCounts(scan), scan.secrets.length, scan.misconfigurations.length, result];
   })),
 ];
@@ -153,7 +155,7 @@ if (totalFindings > 0) summary.push('## 3. Findings', '');
 const vulnerabilityRows = scans.flatMap((scan) => scan.vulnerabilities.map((finding) => [
   markdown(scan.target), markdown(finding.Severity), findingLink(finding.VulnerabilityID || 'Unknown', finding.PrimaryURL),
   markdown(finding.PkgName), markdown(finding.InstalledVersion), markdown(finding.FixedVersion), markdown(finding.target),
-  allowedVulnerabilities(scan) > 0 ? '⚠️ ALLOWED — ignore_finding=true' : '❌ BLOCKING',
+  allowedVulnerabilities(scan) > 0 ? '⚠️ ALLOWED — allow_vulnerabilities=true' : '❌ BLOCKING',
 ]));
 if (vulnerabilityRows.length) {
   summary.push(`### 🛡️ Vulnerabilities (${vulnerabilityRows.length})`, '', `<details><summary>View all ${vulnerabilityRows.length} vulnerability finding(s)</summary>`, '',
@@ -186,10 +188,10 @@ if (totalFindings > 0 || totals.failures > 0) {
   if (totals.misconfigurations) actions.push('Apply the reported **Resolution** to the affected file and line.');
   summary.push(...actions.map((action, index) => `${index + 1}. ${action}`), '');
   if (hasNonBlockingFindings) {
-    summary.push('**Note:** With `ignore_finding: true`, vulnerabilities are reported but do not fail the job. Misconfigurations, secrets, and scan failures always fail the job.', '');
+    summary.push('**Note:** With `allow_vulnerabilities: true`, vulnerabilities are reported but do not fail the scan gate. Misconfigurations, secrets, and scan failures always block.', '');
   }
 }
-if (totals.secrets) summary.push('**Secrets always block merging, including when `ignore_finding: true`.**', '');
+if (totals.secrets) summary.push('**Secrets always block merging, including when `allow_vulnerabilities: true`.**', '');
 fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary.join('\n')}\n`);
 
 const body = [
@@ -212,7 +214,7 @@ const body = [
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
     const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
-    return `${scan.kind.toUpperCase()}: ${scan.target} — ignore_finding=${scan.ignoreFinding} (vulnerabilities only); vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, blocking misconfigurations: ${scan.misconfigurations.length} (${result})`;
+    return `${scan.kind.toUpperCase()}: ${scan.target} — allow_vulnerabilities=${scan.ignoreFinding}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, blocking misconfigurations: ${scan.misconfigurations.length} (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
   ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
@@ -256,7 +258,9 @@ const outputs = {
   finding_count: totalFindings,
   gate_failed: gateFailed,
   send_mail: totalFindings > 0 || totals.failures > 0,
+  notification_required: totalFindings > 0 || totals.failures > 0,
   artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
+  notification_artifact_name: `trivy-mail-${runId}-${runAttempt}-${env.GITHUB_JOB || 'job'}`,
 };
 fs.writeFileSync(mailDetailsPath, JSON.stringify({
   subject: `[TRIVY][${mailStatus}] ${totals.vulnerabilities} vulns, ${totals.misconfigurations} misconfigs, ${totals.secrets} secrets — ${env.GITHUB_REPOSITORY || 'repository'}`,

@@ -130,6 +130,11 @@ test('real report outputs bypass only allowed vulnerabilities, never secrets, mi
       const result = finalize({ FINDING_COUNT: String(outputs.finding_count), GATE_FAILED: String(outputs.gate_failed), REPORT_OUTCOME: outputs.gate_failed ? 'failure' : 'success' });
       assert.equal(result.bypassed, item.allowed ? 'true' : 'false', JSON.stringify(item));
       assert.equal(result.code, item.clean ? 0 : 1);
+      if (item.allowed) {
+        const unrelatedFailure = finalize({ FINDING_COUNT: String(outputs.finding_count), GATE_FAILED: 'false', REPORT_OUTCOME: 'success', JOB_STATUS: 'failure' });
+        assert.equal(unrelatedFailure.bypassed, 'false');
+        assert.equal(check({ build: { result: 'failure', outputs: { scan_bypassed: unrelatedFailure.bypassed } } }).code, 1);
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

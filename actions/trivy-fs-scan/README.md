@@ -1,17 +1,16 @@
-# Trivy filesystem and image scan
+# Trivy filesystem scan
 
-Scans files changed in the pull request and, optionally, one or more container images. This action only scans and collects results; it does not create the workflow Summary or send email. Use `trivy-report` once after all scan actions, then use `trivy-mail` in a downstream job when its output says an email is needed.
+Scans files changed in the pull request and collects results for `trivy-report`. Use `trivy-image-scan` separately for container images.
 
 ## Inputs
 
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
-| `trivy-server` | No | Empty | Trivy server URL. Local scanning is used if the server is unavailable. |
+| `trivy_server` | No | Empty | Trivy server URL. Local scanning is used if the server is unavailable. |
 | `severity` | No | `CRITICAL,HIGH` | Comma-separated severity levels to scan. |
 | `scanners` | No | `secret,misconfig,vuln` | Comma-separated Trivy scanners. |
-| `enable-image-scan` | No | `false` | Also scan container images when set to `true`. |
-| `image-ref` | No | Empty | Space-separated image references; required when image scanning is enabled. |
-| `ignore_finding` | No | `false` | Passes the finding policy to `trivy-report`. When `true`, vulnerabilities remain visible but do not fail the job. Misconfigurations, secrets, and scan errors always fail. |
+| `allow_vulnerabilities` | No | `false` | Allows vulnerability findings. Misconfigurations, secrets, and scan errors still block. |
+| `ignore_finding` | No | `false` | Legacy alias for `allow_vulnerabilities`. |
 
 ## Results
 
@@ -24,3 +23,4 @@ $RUNNER_TEMP/trivy-collect/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/scan.<random>/
 Call `trivy-report` in the same job to collect these results. When scans run in separate jobs, upload this directory as an artifact and download it into a shared directory before calling `trivy-report` with `report_dir` set to that directory.
 
 Filesystem scanning uses the pull request's `base...head` diff, so the checkout must include both commits (`fetch-depth: 0`). Vulnerability scans use `--ignore-unfixed`, so findings without a known fix are excluded.
+The action records `scan_succeeded: false` if scope preparation or scanning fails.

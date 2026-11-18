@@ -10,6 +10,10 @@ inputs:
     description: "Trivy server URL (if using server mode)"
     required: false
     default: ""
+  allow_vulnerabilities:
+    description: "Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail."
+    required: false
+    default: ""
   ignore_finding:
     description: "Pass the finding policy to trivy-report. When true, allow vulnerabilities. Misconfigurations, secrets, and scan errors always fail."
     required: false
@@ -72,7 +76,7 @@ runs:
         SCAN_TARGET: ${{ inputs.dockerfile_path }}
         SCAN_COMMIT: ${{ inputs.commit_id }}
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
-        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
         SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -80,5 +84,5 @@ runs:
         scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
         if [ -f trivy-report.json ]; then cp trivy-report.json "$scan_result_dir/report.json"; fi
         if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-report.json ] && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' trivy-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
-        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
+        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"

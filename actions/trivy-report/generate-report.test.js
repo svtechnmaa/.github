@@ -65,7 +65,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.summary, /## 3\. Findings/);
   assert.match(data.summary, /\[CVE-2026-1\]\(https:\/\/example\.com\/CVE-2026-1\)/);
   assert.match(data.summary, /Fixed in/);
-  assert.match(data.summary, /ignore_finding: true/);
+  assert.match(data.summary, /allow_vulnerabilities: true/);
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
@@ -181,7 +181,7 @@ test('allowed vulnerabilities in one scan cannot bypass misconfigurations in ano
 });
 
 test('invalid reports remain blocking even when scan metadata permits vulnerabilities', () => {
-  for (const report of [{}, { SchemaVersion: 2, Results: 'invalid' }]) {
+  for (const report of [{}, { SchemaVersion: 2, Results: 'invalid' }, { SchemaVersion: 2, Results: [null] }, { SchemaVersion: 2, Results: [{ Secrets: {} }] }]) {
     const data = run([{ meta: { kind: 'image', target: 'app:sha', ignore_finding: true, scan_ok: true }, report }]);
     assert.equal(data.values.gate_failed, 'true');
     assert.equal(data.values.send_mail, 'true');
@@ -200,7 +200,7 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
   assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
   assert.match(data.summary, /\| backend \| true \| 1 \(1 allowed, 0 blocking\)/);
   assert.match(data.summary, /\| frontend \| false \| 1 \(0 allowed, 1 blocking\)/);
-  assert.match(data.summary, /ALLOWED — ignore_finding=true/);
+  assert.match(data.summary, /ALLOWED — allow_vulnerabilities=true/);
   assert.match(data.summary, /❌ BLOCKING/);
   assert.match(data.summary, /❌ ALWAYS BLOCKING/);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 1/);
@@ -216,11 +216,37 @@ test('scan failures cannot present their vulnerability results as allowed', () =
   ]);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 0/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
-  assert.doesNotMatch(data.summary, /ALLOWED — ignore_finding=true/);
+  assert.doesNotMatch(data.summary, /ALLOWED — allow_vulnerabilities=true/);
 });
 
 test('missing results do not produce a clean report', () => {
   const data = run([]);
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
+});
+
+test('successful Trivy reports may omit Results or contain null', () => {
+  for (const report of [{ SchemaVersion: 2 }, { SchemaVersion: 2, Results: null }, { SchemaVersion: 2, Results: [] }]) {
+    const data = run([{ meta: { kind: 'filesystem', allow_vulnerabilities: true, scan_succeeded: true }, report }]);
+    assert.equal(data.values.gate_failed, 'false');
+    assert.equal(data.values.finding_count, '0');
+    assert.equal(data.values.notification_required, 'false');
+  }
+});
+
+test('failed scans never become clean when Results is omitted', () => {
+  const data = run([{ meta: { kind: 'filesystem', allow_vulnerabilities: true, scan_succeeded: false }, report: { SchemaVersion: 2 } }]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.equal(data.values.notification_required, 'true');
+});
+
+test('a failed filesystem preparation remains blocking alongside a successful image scan', () => {
+  const data = run([
+    { meta: { kind: 'filesystem', target: 'changed files', scan_succeeded: false, allow_vulnerabilities: true }, report: { SchemaVersion: 2, Results: [] } },
+    { meta: { kind: 'image', target: 'app:sha', scan_succeeded: true, allow_vulnerabilities: true }, report: { SchemaVersion: 2, Results: [] } },
+  ]);
+  assert.equal(data.values.scan_count, '2');
+  assert.equal(data.values.gate_failed, 'true');
+  assert.equal(data.values.notification_required, 'true');
+  assert.match(data.summary, /Scan failed/);
 });

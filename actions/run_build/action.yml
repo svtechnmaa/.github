@@ -52,8 +52,12 @@ inputs:
     description: Trivy server URL. The image scan falls back to a local scan when unavailable.
     required: false
     default: ""
+  allow_vulnerabilities:
+    description: Allow HIGH/CRITICAL vulnerability findings. Misconfigurations, secrets, and scan failures still block.
+    required: false
+    default: ""
   ignore_finding:
-    description: Fail the job on HIGH/CRITICAL Dockerfile or image findings by default. Set to true to allow the job to pass.
+    description: Legacy alias for allow_vulnerabilities.
     required: false
     default: "false"
 
@@ -88,9 +92,24 @@ outputs:
   trivy_send_mail:
     description: Whether the one Trivy report needs an email.
     value: ${{ steps.trivy_report.outputs.send_mail }}
+  notification_required:
+    description: Whether the Trivy report prepared a notification.
+    value: ${{ steps.trivy_report.outputs.notification_required }}
   trivy_mail_artifact:
     description: Artifact name for Trivy mail sent after the build job.
     value: ${{ steps.trivy_report.outputs.artifact_name }}
+  notification_artifact_name:
+    description: Artifact containing the prepared Trivy notification.
+    value: ${{ steps.trivy_report.outputs.notification_artifact_name }}
+  trivy_report_outcome:
+    description: Outcome of the consolidated Trivy report step.
+    value: ${{ steps.trivy_report.outcome }}
+  trivy_finding_count:
+    description: Total findings across completed scans.
+    value: ${{ steps.trivy_report.outputs.finding_count }}
+  trivy_gate_failed:
+    description: Whether the report found blocking results or scan failures.
+    value: ${{ steps.trivy_report.outputs.gate_failed }}
   commit_author_email:
     description: Commit author's email for the downstream Trivy mail job.
     value: ${{ steps.commit_author.outputs.email }}
@@ -268,7 +287,7 @@ runs:
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         trivy_server: ${{ inputs.trivy_server }}
-        ignore_finding: ${{ inputs.ignore_finding }}
+        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
 
@@ -281,7 +300,7 @@ runs:
       uses: svtechnmaa/.github/actions/trivy-image-scan@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
-        ignore_finding: ${{ inputs.ignore_finding }}
+        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}

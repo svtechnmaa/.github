@@ -12,13 +12,13 @@ Call this action once after the Trivy scan actions. It reads their collected res
 
 | Output | Meaning |
 | --- | --- |
-| `scan_count` | Number of collected scans. |
-| `finding_count` | Total vulnerabilities, secrets, and misconfigurations. |
+| `total_scans` | Number of collected scans. |
+| `total_findings` | Total vulnerabilities, secrets, and misconfigurations. |
 | `gate_failed` | `true` if a scan failed or a non-ignored finding was found. |
-| `send_mail` | `true` if findings or scan errors require an email. |
-| `artifact_name` | Artifact containing the email files when `send_mail` is true. |
+| `notification_required` | `true` if findings or scan errors require an email. |
+| `notification_artifact_name` | Artifact containing `trivy-mail.html`, `trivy-mail.txt`, and `trivy-mail-details.json`. |
 
-With `ignore_finding: true`, vulnerabilities remain visible in the Summary and email but do not fail the job. Misconfigurations, secrets, and scan errors always fail the job. Clean scans produce a Summary but no email artifact.
+With `allow_vulnerabilities: true`, vulnerabilities remain visible in the Summary and email but do not block the scan gate. Misconfigurations, secrets, and scan errors always block. Clean scans produce a Summary but no email artifact. Legacy output names remain available during migration.
 
 The Summary and email distinguish allowed and blocking vulnerabilities, show each
 target's policy, and label every finding's gate decision in the detailed Summary.

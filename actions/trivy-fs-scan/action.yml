@@ -1,8 +1,8 @@
-name: Trivy Filesystem and Image Scan
-description: Scan files changed in a pull request and optionally scan container images. Collect results for trivy-report.
+name: Trivy Filesystem Scan
+description: Scan files changed in a pull request and collect results for trivy-report.
 
 inputs:
-  trivy-server:
+  trivy_server:
     description: Trivy server URL. The action falls back to local scanning if unavailable.
     required: false
     default: ""
@@ -14,12 +14,8 @@ inputs:
     description: Comma-separated Trivy scanners to enable.
     required: false
     default: secret,misconfig,vuln
-  enable-image-scan:
-    description: Also scan the images in image-ref.
-    required: false
-    default: "false"
-  image-ref:
-    description: Space-separated image references. Required when enable-image-scan is true.
+  allow_vulnerabilities:
+    description: Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail.
     required: false
     default: ""
   ignore_finding:
@@ -77,10 +73,10 @@ runs:
 
     - name: Check Trivy server
       id: trivy_mode
-      if: steps.prepare_scope.outputs.has_scope == 'true' || inputs.enable-image-scan == 'true'
+      if: steps.prepare_scope.outputs.has_scope == 'true'
       shell: bash
       env:
-        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SERVER: ${{ inputs.trivy_server }}
       run: |
         if [ -n "$TRIVY_SERVER" ] && curl -sS --fail --max-time 5 "${TRIVY_SERVER%/}/healthz" >/dev/null; then
           echo "use_server=true" >> "$GITHUB_OUTPUT"
@@ -94,7 +90,7 @@ runs:
       if: steps.prepare_scope.outputs.has_scope == 'true'
       shell: bash
       env:
-        TRIVY_SERVER: ${{ inputs.trivy-server }}
+        TRIVY_SERVER: ${{ inputs.trivy_server }}
         TRIVY_SCANNERS: ${{ inputs.scanners }}
         TRIVY_SEVERITY: ${{ inputs.severity }}
         USE_SERVER: ${{ steps.trivy_mode.outputs.use_server }}
@@ -119,12 +115,13 @@ runs:
       continue-on-error: true
 
     - name: Collect filesystem scan result
-      if: always() && steps.prepare_scope.outcome == 'success'
+      if: always()
       shell: bash
       env:
         HAS_SCOPE: ${{ steps.prepare_scope.outputs.has_scope }}
+        PREPARE_OUTCOME: ${{ steps.prepare_scope.outcome }}
         SCAN_OUTCOME: ${{ steps.scan_files.outcome }}
-        IGNORE_FINDING: ${{ inputs.ignore_finding }}
+        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
         SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         SCAN_AUTHOR: ${{ github.actor }}
       run: |
@@ -134,58 +131,12 @@ runs:
         if [ ! -s trivy-fs.json ]; then echo '{"SchemaVersion":2,"Results":[]}' > trivy-fs.json; fi
         cp trivy-fs.json "$scan_result_dir/report.json"
         scan_ok=false
-        if [ "$HAS_SCOPE" != "true" ]; then
+        if [ "$PREPARE_OUTCOME" != "success" ]; then
+          scan_ok=false
+        elif [ "$HAS_SCOPE" != "true" ]; then
           scan_ok=true
         elif [ "$SCAN_OUTCOME" = "success" ] && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' trivy-fs.json >/dev/null 2>&1; then
           scan_ok=true
         fi
-        jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
-
-    - name: Scan container images
-      id: scan_images
-      if: inputs.enable-image-scan == 'true'
-      shell: bash
-      env:
-        TRIVY_SERVER: ${{ inputs.trivy-server }}
-        TRIVY_SCANNERS: ${{ inputs.scanners }}
-        TRIVY_SEVERITY: ${{ inputs.severity }}
-        TRIVY_IMAGE_REFS: ${{ inputs.image-ref }}
-        USE_SERVER: ${{ steps.trivy_mode.outputs.use_server }}
-        IGNORE_FINDING: ${{ inputs.ignore_finding }}
-        SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        SCAN_AUTHOR: ${{ github.actor }}
-      run: |
-        set -uo pipefail
-        report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        mkdir -p "$report_dir"
-        read -r -a image_refs <<< "$TRIVY_IMAGE_REFS"
-        if [ "${#image_refs[@]}" -eq 0 ]; then
-          image_refs=("")
-        fi
-        failures=0
-        for image_ref in "${image_refs[@]}"; do
-          scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
-          report_file="$scan_result_dir/report.json"
-          scan_ok=false
-          if [ -n "$image_ref" ]; then
-            scan_image() {
-              trivy image "$@" --scanners "$TRIVY_SCANNERS" --severity "$TRIVY_SEVERITY" \
-                --ignore-unfixed --format json --output "$report_file" --exit-code 0 "$image_ref"
-            }
-            if [ "$USE_SERVER" = "true" ] && scan_image --server "$TRIVY_SERVER" && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' "$report_file" >/dev/null 2>&1; then
-              scan_ok=true
-            else
-              rm -f "$report_file"
-              if scan_image && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' "$report_file" >/dev/null 2>&1; then scan_ok=true; fi
-            fi
-          fi
-          if [ "$scan_ok" != "true" ]; then
-            echo '{"SchemaVersion":2,"Results":[]}' > "$report_file"
-            failures=$((failures + 1))
-          fi
-          jq -n --arg kind image --arg target "${image_ref:-image-ref missing}" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg ignore "$IGNORE_FINDING" --arg ok "$scan_ok" \
-            '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,ignore_finding:($ignore == "true"),scan_ok:($ok == "true")}' > "$scan_result_dir/meta.json"
-        done
-        [ "$failures" -eq 0 ] || exit 1
-      continue-on-error: true
+        jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"

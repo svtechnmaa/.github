@@ -3,14 +3,37 @@ description: Send one Trivy report email after the scan job finishes and its Git
 
 inputs:
   artifact_name:
-    description: Artifact name produced by trivy-report when findings or scan errors require an email.
-    required: true
+    description: Legacy name for notification_artifact_name.
+    required: false
+    default: ""
+  notification_artifact_name:
+    description: Artifact name produced by trivy-report for the prepared notification.
+    required: false
+    default: ""
+  smtp_username:
+    description: SMTP authentication username.
+    required: false
+    default: ""
+  smtp_password:
+    description: SMTP authentication password.
+    required: false
+    default: ""
+  recipients:
+    description: Comma-separated notification recipients.
+    required: false
+    default: ""
+  from_address:
+    description: Sender email address; defaults to the SMTP username.
+    required: false
+    default: ""
   mail_username:
-    description: SMTP sender address.
-    required: true
+    description: Legacy name for smtp_username.
+    required: false
+    default: ""
   mail_password:
-    description: SMTP password.
-    required: true
+    description: Legacy name for smtp_password.
+    required: false
+    default: ""
   mail_receivers:
     description: Comma-separated report recipients.
     required: false
@@ -34,16 +57,16 @@ runs:
     - name: Download Trivy mail files
       uses: actions/download-artifact@v7
       with:
-        name: ${{ inputs.artifact_name }}
+        name: ${{ inputs.notification_artifact_name || inputs.artifact_name }}
         path: .
 
     - name: Read mail details
       id: mail_details
       shell: bash
       env:
-        RAW_MAIL_RECEIVERS: ${{ inputs.mail_receivers }}
+        RAW_MAIL_RECEIVERS: ${{ inputs.recipients || inputs.mail_receivers }}
         IT_TEAM_EMAIL: ${{ inputs.it_team_email }}
-        FALLBACK_MAIL_RECEIVER: ${{ inputs.mail_username }}
+        FALLBACK_MAIL_RECEIVER: ${{ inputs.from_address || inputs.smtp_username || inputs.mail_username }}
       run: |
         subject="$(jq -er '.subject | select(type == "string" and length > 0)' trivy-mail-details.json)"
         secret_count="$(jq -er '.secret_count | select(type == "number" and . >= 0)' trivy-mail-details.json)"
@@ -61,10 +84,10 @@ runs:
         server_address: ${{ inputs.smtp_server }}
         server_port: ${{ inputs.smtp_port }}
         secure: true
-        username: ${{ inputs.mail_username }}
-        password: ${{ inputs.mail_password }}
+        username: ${{ inputs.smtp_username || inputs.mail_username }}
+        password: ${{ inputs.smtp_password || inputs.mail_password }}
         subject: ${{ steps.mail_details.outputs.subject || '[TRIVY] Scan report' }}
         to: ${{ steps.mail_details.outputs.mail_receivers }}
-        from: Security Bot <${{ inputs.mail_username }}>
+        from: Security Bot <${{ inputs.from_address || inputs.smtp_username || inputs.mail_username }}>
         body: file://trivy-mail.txt
         html_body: file://trivy-mail.html

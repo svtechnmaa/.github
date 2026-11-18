@@ -8,6 +8,12 @@ inputs:
     default: ""
 
 outputs:
+  total_findings:
+    description: Total findings across all collected scans.
+    value: ${{ steps.report.outputs.finding_count }}
+  total_scans:
+    description: Number of collected scans.
+    value: ${{ steps.report.outputs.scan_count }}
   finding_count:
     description: Total findings across all collected scans.
     value: ${{ steps.report.outputs.finding_count }}
@@ -20,9 +26,15 @@ outputs:
   send_mail:
     description: Whether findings or scan failures require an email.
     value: ${{ steps.report.outputs.send_mail }}
+  notification_required:
+    description: Whether findings or scan failures require notification.
+    value: ${{ steps.report.outputs.notification_required }}
   artifact_name:
     description: Mail files artifact name when findings or scan errors require an email.
     value: ${{ steps.report.outputs.artifact_name }}
+  notification_artifact_name:
+    description: Artifact containing the prepared email payload.
+    value: ${{ steps.report.outputs.notification_artifact_name }}
 
 runs:
   using: composite
@@ -36,10 +48,10 @@ runs:
       run: node "$ACTION_PATH/generate-report.js"
 
     - name: Save mail for downstream job
-      if: steps.report.outputs.send_mail == 'true'
+      if: steps.report.outputs.notification_required == 'true'
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ steps.report.outputs.artifact_name }}
+        name: ${{ steps.report.outputs.notification_artifact_name }}
         path: |
           trivy-mail.txt
           trivy-mail.html
