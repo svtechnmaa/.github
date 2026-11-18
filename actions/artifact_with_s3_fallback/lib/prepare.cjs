@@ -3,6 +3,7 @@ module.exports = async ({glob, core}) => {
   const fs = require('node:fs/promises');
   const path = require('node:path');
   const os = require('node:os');
+  const {randomUUID} = require('node:crypto');
   const env = process.env;
   const matcher = await glob.create(env.ARTIFACT_PATH, {
     followSymbolicLinks: true,
@@ -10,12 +11,18 @@ module.exports = async ({glob, core}) => {
     omitBrokenSymbolicLinks: true,
   });
   const roots = matcher.getSearchPaths();
+  const relativeInside = (root, file) => {
+    const relative = path.relative(root, file);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return null;
+    }
+    return relative;
+  };
   // glob starts walking at each search root. Hidden ancestors above that root
   // are not visited, but a hidden root itself prevents traversal.
   const visibleFromSearchRoot = file => roots.some(root => {
-    const relative = path.relative(root, file);
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
-    return [path.basename(root), ...relative.split(path.sep)]
+    const relative = relativeInside(root, file);
+    return relative !== null && [path.basename(root), ...relative.split(path.sep)]
       .every(segment => !segment.startsWith('.'));
   });
   const files = [];
@@ -34,18 +41,12 @@ module.exports = async ({glob, core}) => {
     throw new Error('archive=false requires exactly one matching file');
   }
   const name = archive ? env.ARTIFACT_NAME : path.basename(files[0]);
-  // Match the artifact service's forbidden characters and keep S3 segments safe.
-  if (!name || /[\\/":<>|*?\x00-\x1f]/.test(name) || name === '.' || name === '..') {
-    throw new Error('Invalid artifact name');
-  }
   let root = roots[0];
   if (roots.length === 1 && files.length === 1 && root === files[0]) {
     root = path.dirname(root);
   } else {
     for (const candidate of roots.slice(1)) {
-      while (true) {
-        const relative = path.relative(root, candidate);
-        if (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) break;
+      while (relativeInside(root, candidate) === null) {
         const parent = path.dirname(root);
         if (parent === root) throw new Error('Upload paths must share a filesystem root');
         root = parent;
@@ -53,23 +54,25 @@ module.exports = async ({glob, core}) => {
     }
   }
   const relativeFiles = files.map(file => {
-    const relative = path.relative(root, file);
-    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    const relative = relativeInside(root, file);
+    if (!relative) {
       throw new Error('Matched file is outside the artifact root');
     }
     return relative;
   });
-  const directory = await fs.mkdtemp(path.join(env.RUNNER_TEMP || os.tmpdir(), 'artifact-files-'));
+  const list = path.join(env.RUNNER_TEMP || os.tmpdir(), 'artifact-files-' + randomUUID());
+  const file = await fs.open(list, 'wx', 0o600);
   try {
-    await fs.writeFile(path.join(directory, 'files'), relativeFiles.join('\0') + '\0');
-    await fs.writeFile(path.join(directory, 'root'), root);
-    await fs.writeFile(path.join(directory, 'name'), name);
-    await fs.writeFile(path.join(directory, 'format'), archive ? 'archive' : 'raw');
-    await fs.writeFile(path.join(directory, 'source'), files[0]);
-    core.setOutput('directory', directory);
-    core.setOutput('empty', 'false');
+    try {
+      await file.writeFile(relativeFiles.join('\0') + '\0');
+    } finally {
+      await file.close();
+    }
+    core.setOutput('file-list', list);
+    core.setOutput('root', root);
+    core.setOutput('name', name);
   } catch (error) {
-    await fs.rm(directory, {recursive: true, force: true});
+    await fs.rm(list, {force: true});
     throw error;
   }
 };

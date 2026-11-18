@@ -1,14 +1,11 @@
-name: Artifact with SeaweedFS fallback
-description: Try GitHub artifacts first, then transfer a named artifact through S3 on failure.
+name: Upload artifact with SeaweedFS fallback
+description: Upload an artifact through S3 if the GitHub upload fails.
 inputs:
-  operation:
-    description: upload or download
-    default: upload
   name:
     description: Artifact name; archive=false uploads use the file basename instead
     default: artifact
   path:
-    description: Upload file/directory/glob, multiline paths with !exclusions, or download destination
+    description: File, directory or glob, including multiline paths and exclusions
     required: true
   if-no-files-found:
     description: warn, error or ignore when no upload files match
@@ -55,40 +52,39 @@ runs:
       if: ${{ always() }}
       shell: bash
       env:
-        OPERATION: ${{ inputs.operation }}
+        ARTIFACT_ACTION_PATH: ${{ github.action_path }}
+        NAME: ${{ inputs.name }}
+        S3_RETRY_COUNT: ${{ inputs.s3-retry-count }}
         NO_FILES: ${{ inputs.if-no-files-found }}
         RETENTION: ${{ inputs.retention-days }}
         COMPRESSION: ${{ inputs.compression-level }}
         OVERWRITE: ${{ inputs.overwrite }}
         HIDDEN: ${{ inputs.include-hidden-files }}
         ARCHIVE: ${{ inputs.archive }}
-        S3_RETRY_COUNT: ${{ inputs.s3-retry-count }}
       run: |
         set -euo pipefail
-        case "$OPERATION" in
-          upload|download) ;;
-          *) echo "::error::operation must be upload or download"; exit 1 ;;
+        source "$ARTIFACT_ACTION_PATH/../lib/validate.sh"
+        validate_retry_count "$S3_RETRY_COUNT"
+        case "$NO_FILES" in
+          warn|error|ignore) ;;
+          *) echo '::error::if-no-files-found must be warn, error or ignore'; exit 1 ;;
         esac
-        [[ "$S3_RETRY_COUNT" =~ ^(0|[1-9][0-9]*)$ ]] || { echo '::error::s3-retry-count must be a nonnegative integer'; exit 1; }
-        if [[ "$OPERATION" == upload ]]; then
-          case "$NO_FILES" in
-            warn|error|ignore) ;;
-            *) echo '::error::if-no-files-found must be warn, error or ignore'; exit 1 ;;
-          esac
-          [[ "$RETENTION" =~ ^(0|[1-9][0-9]*)$ ]] || { echo '::error::retention-days must be a nonnegative integer'; exit 1; }
-          [[ "$COMPRESSION" =~ ^[0-9]$ ]] || { echo '::error::compression-level must be 0-9'; exit 1; }
-          for value in "$OVERWRITE" "$HIDDEN" "$ARCHIVE"; do
-            [[ "$value" == true || "$value" == false ]] || { echo '::error::Boolean inputs must be true or false'; exit 1; }
-          done
+        [[ "$RETENTION" =~ ^(0|[1-9][0-9]*)$ ]] || { echo '::error::retention-days must be a nonnegative integer'; exit 1; }
+        [[ "$COMPRESSION" =~ ^[0-9]$ ]] || { echo '::error::compression-level must be 0-9'; exit 1; }
+        for value in "$OVERWRITE" "$HIDDEN" "$ARCHIVE"; do
+          [[ "$value" == true || "$value" == false ]] || { echo '::error::Boolean inputs must be true or false'; exit 1; }
+        done
+        if [[ "$ARCHIVE" == true ]]; then
+          export_artifact_name "$NAME"
         fi
 
     - name: Upload to GitHub
       id: upload
-      if: ${{ always() && steps.validate.outcome == 'success' && inputs.operation == 'upload' }}
+      if: ${{ always() && steps.validate.outcome == 'success' }}
       continue-on-error: true
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: ${{ inputs.name }}
+        name: ${{ steps.validate.outputs.name || inputs.name }}
         path: ${{ inputs.path }}
         if-no-files-found: ${{ inputs.if-no-files-found }}
         retention-days: ${{ inputs.retention-days }}
@@ -97,39 +93,29 @@ runs:
         include-hidden-files: ${{ inputs.include-hidden-files }}
         archive: ${{ inputs.archive }}
 
-    - name: Download from GitHub
-      id: download
-      if: ${{ always() && steps.validate.outcome == 'success' && inputs.operation == 'download' }}
-      continue-on-error: true
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-      with:
-        name: ${{ inputs.name }}
-        path: ${{ inputs.path }}
-
     - name: Resolve S3 upload files
       id: files
       if: ${{ always() && steps.upload.outcome == 'failure' }}
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
-        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_NAME: ${{ steps.validate.outputs.name }}
         ARTIFACT_PATH: ${{ inputs.path }}
-        ARTIFACT_NO_FILES: ${{ inputs.if-no-files-found }}
         ARTIFACT_HIDDEN: ${{ inputs.include-hidden-files }}
         ARTIFACT_ARCHIVE: ${{ inputs.archive }}
         ARTIFACT_ACTION_PATH: ${{ github.action_path }}
       with:
         script: |
           const path = require('node:path');
-          await require(path.join(process.env.ARTIFACT_ACTION_PATH, 'prepare.cjs'))({glob, core});
+          await require(path.join(process.env.ARTIFACT_ACTION_PATH, '../lib/prepare.cjs'))({glob, core});
 
-    - name: Transfer through SeaweedFS after GitHub failure
-      if: ${{ always() && (steps.download.outcome == 'failure' || (steps.upload.outcome == 'failure' && steps.files.outcome == 'success' && steps.files.outputs.empty != 'true')) }}
+    - name: Upload through SeaweedFS
+      if: ${{ always() && steps.files.outcome == 'success' }}
       shell: bash
       env:
-        ARTIFACT_OPERATION: ${{ inputs.operation }}
-        ARTIFACT_NAME: ${{ inputs.name }}
-        ARTIFACT_PATH: ${{ inputs.path }}
-        ARTIFACT_PREPARED: ${{ steps.files.outputs.directory }}
+        ARTIFACT_NAME: ${{ steps.files.outputs.name }}
+        ARTIFACT_ROOT: ${{ steps.files.outputs.root }}
+        ARTIFACT_FILE_LIST: ${{ steps.files.outputs.file-list }}
+        ARTIFACT_ARCHIVE: ${{ inputs.archive }}
         ARTIFACT_COMPRESSION: ${{ inputs.compression-level }}
         ARTIFACT_OVERWRITE: ${{ inputs.overwrite }}
         ARTIFACT_RETENTION: ${{ inputs.retention-days }}
@@ -140,5 +126,4 @@ runs:
         AWS_ACCESS_KEY_ID: ${{ inputs.s3-access-key }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.s3-secret-key }}
         ARTIFACT_ACTION_PATH: ${{ github.action_path }}
-      run: |
-        bash "$ARTIFACT_ACTION_PATH/transfer.sh"
+      run: bash "$ARTIFACT_ACTION_PATH/../lib/upload.sh"

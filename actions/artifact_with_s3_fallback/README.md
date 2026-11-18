@@ -1,7 +1,7 @@
 # GitHub artifacts with SeaweedFS fallback
 
-Shared Linux composite action in `svtechnmaa/.github/actions/artifact_with_s3_fallback`.
-It tries `actions/upload-artifact@v7` or `actions/download-artifact@v8` first,
+Shared Linux composite actions in `svtechnmaa/.github/actions/artifact_with_s3_fallback`.
+The upload and download actions try `actions/upload-artifact@v7` and `actions/download-artifact@v8` respectively,
 with `continue-on-error: true`, then uses Bash/curl to transfer through S3 on
 failure. A failed fallback fails the caller step, unless that step also sets
 `continue-on-error: true`. Earlier deployment/test failures remain failures.
@@ -12,7 +12,6 @@ Upload inputs follow [upload-artifact@v7](https://github.com/actions/upload-arti
 
 | Input | Default | GitHub | SeaweedFS fallback |
 | --- | --- | --- | --- |
-| `operation` | `upload` | `upload` or `download` | Same |
 | `name` | `artifact` | Artifact name | Same; with `archive: false`, upload uses the file basename |
 | `path` | Required | File, directory, wildcard, multiline paths and `!exclude`; download destination | Same matching/root layout using `@actions/glob` |
 | `if-no-files-found` | `warn` | `warn`, `error`, `ignore` | If GitHub upload has failed, zero matches always fail the fallback |
@@ -44,11 +43,10 @@ the no-overwrite guarantee. This is not a global cross-backend artifact registry
 ## Usage
 
 ```yaml
-- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
+- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback/upload@<sha>
   if: always()
   continue-on-error: true # Optional for informational Robot reports
   with:
-    operation: upload
     name: robot-nmaa-result-#${{ github.run_number }}
     path: |
       ${{ github.workspace }}/test_result/**
@@ -57,9 +55,8 @@ the no-overwrite guarantee. This is not a global cross-backend artifact registry
     s3-access-key: ${{ secrets.S3_ARTIFACT_ACCESS_KEY }}
     s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
 
-- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
+- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback/download@<sha>
   with:
-    operation: download
     name: robot-nmaa-result-#${{ github.run_number }}
     path: ${{ github.workspace }}/restored-results
     s3-access-key: ${{ secrets.S3_ARTIFACT_ACCESS_KEY }}
@@ -69,7 +66,7 @@ the no-overwrite guarantee. This is not a global cross-backend artifact registry
 Raw upload example:
 
 ```yaml
-- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback@main
+- uses: svtechnmaa/.github/actions/artifact_with_s3_fallback/upload@<sha>
   with:
     path: dist/release.tar.gz
     archive: false # Effective artifact name: release.tar.gz
@@ -77,8 +74,9 @@ Raw upload example:
     s3-secret-key: ${{ secrets.S3_ARTIFACT_SECRET_KEY }}
 ```
 
-Charts `main.yml` uses the action defaults for upload options. Robot report
-uploads keep caller-level `continue-on-error: true`.
+Replace `<sha>` with the shared repository's full commit SHA. To migrate from
+the combined action, append `/upload` or `/download` to the action path and remove
+the `operation` input.
 
 ## Runner and repository setup
 
@@ -89,7 +87,7 @@ sign this action's `--upload-file` PUTs using the supplied payload SHA-256.
 Only failed GitHub uploads invoke `actions/github-script@v8` to resolve files with
 its built-in `@actions/glob`. This handles wildcard patterns, exclusions, tilde
 expansion, hidden-file filtering and the least common ancestor of search paths.
-Because github-script bundles `@actions/glob` 0.4.0, `prepare.cjs` filters hidden
+Because github-script bundles `@actions/glob` 0.4.0, `lib/prepare.cjs` filters hidden
 path segments itself. Unless `include-hidden-files: true`, a hidden search root
 and hidden entries below a search root are excluded. Ancestors above the search
 root are not checked, matching GitHub's traversal: `.output/public/**` includes
@@ -134,10 +132,9 @@ runs but no second PUT is sent. PUT retries cover HTTP 408, 429, 500, 502, 503,
 to distinguish a missing object (on AWS S3, `s3:ListBucket`); otherwise verification
 can fail with HTTP 403.
 
-Call the shared action directly, without checking out its repository. For a
+Call the shared actions directly, without checking out their repository. For a
 private action repository, enable caller access under **Settings → Actions →
-General → Access**. Publish changes to `svtechnmaa/.github@main` before running
-updated caller workflows.
+General → Access**.
 
 ## S3 layout and reruns
 
