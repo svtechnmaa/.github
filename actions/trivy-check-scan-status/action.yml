@@ -1,0 +1,38 @@
+name: Check Trivy Scan Status
+description: Finish a build job with a visible failure only when vulnerabilities were explicitly allowed and all preceding work succeeded.
+
+inputs:
+  job_status:
+    description: Job status immediately before this final step. Pass job.status.
+    required: true
+  report_outcome:
+    description: Outcome of the trivy-report step. Pass steps.trivy_report.outcome.
+    required: true
+  finding_count:
+    description: finding_count output from trivy-report.
+    required: false
+    default: ""
+  gate_failed:
+    description: gate_failed output from trivy-report.
+    required: false
+    default: ""
+
+outputs:
+  scan_bypassed:
+    description: True only when this action intentionally fails an otherwise successful job for allowed vulnerabilities.
+    value: ${{ steps.status.outputs.scan_bypassed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Finalize Trivy scan status
+      id: status
+      if: always()
+      shell: bash
+      env:
+        JOB_STATUS: ${{ inputs.job_status }}
+        REPORT_OUTCOME: ${{ inputs.report_outcome }}
+        FINDING_COUNT: ${{ inputs.finding_count }}
+        GATE_FAILED: ${{ inputs.gate_failed }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "$ACTION_PATH/check-status.sh"
