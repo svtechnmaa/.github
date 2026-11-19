@@ -55,10 +55,6 @@ inputs:
   allow_vulnerabilities:
     description: Allow HIGH/CRITICAL vulnerability findings. Misconfigurations, secrets, and scan failures still block.
     required: false
-    default: ""
-  ignore_finding:
-    description: Legacy alias for allow_vulnerabilities.
-    required: false
     default: "false"
 
 outputs:
@@ -287,7 +283,7 @@ runs:
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         trivy_server: ${{ inputs.trivy_server }}
-        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
+        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
 
@@ -300,7 +296,7 @@ runs:
       uses: svtechnmaa/.github/actions/trivy-image-scan@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
-        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
+        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}

@@ -11,7 +11,7 @@ jobs that must be checked. Pass `jobs: ${{ toJSON(needs) }}`.
 | `cancelled`, unknown result, or malformed job JSON | Fail |
 
 Only expose `scan_bypassed` from the final `trivy-check-scan-status` action. Never
-derive it directly from `ignore_finding`: that flag cannot prove the rest of a
+derive it directly from `allow_vulnerabilities`: that flag cannot prove the rest of a
 build succeeded. The scan-status action must be the last job step, after all
 required work. Existing callers without this output still fail for every failed
 job. Other jobs' failures still block even when one build is bypassed.

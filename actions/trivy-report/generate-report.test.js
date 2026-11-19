@@ -47,9 +47,9 @@ const secret = { RuleID: 'secret-rule', Severity: 'HIGH', Title: 'Credential', S
 
 test('combines repeated scans and records secret count for downstream mail', () => {
   const data = run([
-    { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'app:first', Secrets: [secret] }] } },
-    { meta: { kind: 'image', target: 'app:second', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [] } },
+    { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'app:first', Secrets: [secret] }] } },
+    { meta: { kind: 'image', target: 'app:second', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [] } },
   ]);
   assert.equal(data.values.scan_count, '3');
   assert.equal(data.values.finding_count, '2');
@@ -80,18 +80,18 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.doesNotMatch(data.htmlMail, /secret-rule/);
 });
 
-test('vulnerabilities block scans without ignore_finding', () => {
+test('vulnerabilities block scans without allow_vulnerabilities', () => {
   const data = run([
-    { meta: { kind: 'dockerfile', target: './Dockerfile', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'image', target: 'app:latest', ignore_finding: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'dockerfile', target: './Dockerfile', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'app:latest', allow_vulnerabilities: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.finding_count, '2');
 });
 
-test('scan errors remain blocking even when ignore_finding is true', () => {
+test('scan errors remain blocking even when allow_vulnerabilities is true', () => {
   const data = run([
-    { meta: { kind: 'image', target: 'app:latest', ignore_finding: true, scan_ok: false } },
+    { meta: { kind: 'image', target: 'app:latest', allow_vulnerabilities: true, scan_ok: false } },
   ]);
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
@@ -103,7 +103,7 @@ test('scan errors remain blocking even when ignore_finding is true', () => {
 
 test('allowed vulnerabilities do not block merging', () => {
   const data = run([
-    { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'filesystem', target: 'changed files', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
@@ -113,21 +113,21 @@ test('allowed vulnerabilities do not block merging', () => {
 });
 
 for (const kind of ['filesystem', 'dockerfile', 'image']) {
-  for (const ignoreFinding of [false, true]) {
+  for (const allowVulnerabilities of [false, true]) {
     for (let combination = 0; combination < 8; combination++) {
       const hasVulnerability = Boolean(combination & 1);
       const hasMisconfiguration = Boolean(combination & 2);
       const hasSecret = Boolean(combination & 4);
-      test(`${kind}: ignore=${ignoreFinding}, vuln=${hasVulnerability}, misconfig=${hasMisconfiguration}, secret=${hasSecret}`, () => {
+      test(`${kind}: ignore=${allowVulnerabilities}, vuln=${hasVulnerability}, misconfig=${hasMisconfiguration}, secret=${hasSecret}`, () => {
         const data = run([{
-          meta: { kind, target: 'target', ignore_finding: ignoreFinding, scan_ok: true },
+          meta: { kind, target: 'target', allow_vulnerabilities: allowVulnerabilities, scan_ok: true },
           report: { SchemaVersion: 2, Results: [{
             Vulnerabilities: hasVulnerability ? [vulnerability] : [],
             Misconfigurations: hasMisconfiguration ? [{ ID: 'AVD-TEST', Severity: 'HIGH' }] : [],
             Secrets: hasSecret ? [secret] : [],
           }] },
         }]);
-        const blocking = hasSecret || hasMisconfiguration || (hasVulnerability && !ignoreFinding);
+        const blocking = hasSecret || hasMisconfiguration || (hasVulnerability && !allowVulnerabilities);
         const hasFindings = hasVulnerability || hasMisconfiguration || hasSecret;
         assert.equal(data.values.gate_failed, String(blocking));
         assert.equal(data.values.send_mail, String(hasFindings));
@@ -151,7 +151,7 @@ for (const kind of ['filesystem', 'dockerfile', 'image']) {
 test('secrets always block even in an allowed scan, with or without other findings', () => {
   for (const extra of [{}, { Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }]) {
     const data = run([
-      { meta: { kind: 'filesystem', target: 'changed files', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Secrets: [{ ...secret, Match: 'PRIVATE_SECRET_VALUE' }], ...extra }] } },
+      { meta: { kind: 'filesystem', target: 'changed files', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Secrets: [{ ...secret, Match: 'PRIVATE_SECRET_VALUE' }], ...extra }] } },
     ]);
     assert.equal(data.values.gate_failed, 'true');
     assert.equal(data.values.send_mail, 'true');
@@ -169,8 +169,8 @@ test('secrets always block even in an allowed scan, with or without other findin
 
 test('allowed vulnerabilities in one scan cannot bypass misconfigurations in another', () => {
   const data = run([
-    { meta: { kind: 'image', target: 'app:sha', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
-    { meta: { kind: 'dockerfile', target: 'Dockerfile', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+    { meta: { kind: 'image', target: 'app:sha', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'dockerfile', target: 'Dockerfile', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
@@ -182,7 +182,7 @@ test('allowed vulnerabilities in one scan cannot bypass misconfigurations in ano
 
 test('invalid reports remain blocking even when scan metadata permits vulnerabilities', () => {
   for (const report of [{}, { SchemaVersion: 2, Results: 'invalid' }, { SchemaVersion: 2, Results: [null] }, { SchemaVersion: 2, Results: [{ Secrets: {} }] }]) {
-    const data = run([{ meta: { kind: 'image', target: 'app:sha', ignore_finding: true, scan_ok: true }, report }]);
+    const data = run([{ meta: { kind: 'image', target: 'app:sha', allow_vulnerabilities: true, scan_ok: true }, report }]);
     assert.equal(data.values.gate_failed, 'true');
     assert.equal(data.values.send_mail, 'true');
     assert.match(data.mailMetadata.subject, /\[SCAN FAILED\]/);
@@ -191,8 +191,8 @@ test('invalid reports remain blocking even when scan metadata permits vulnerabil
 
 test('mixed scan reports distinguish allowed vulnerabilities from blocking misconfigurations', () => {
   const data = run([
-    { meta: { kind: 'filesystem', target: 'backend', ignore_finding: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
-    { meta: { kind: 'image', target: 'frontend', ignore_finding: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'filesystem', target: 'backend', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-TEST', Severity: 'HIGH' }] }] } },
+    { meta: { kind: 'image', target: 'frontend', allow_vulnerabilities: false, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'true');
   assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
@@ -212,7 +212,7 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
 
 test('scan failures cannot present their vulnerability results as allowed', () => {
   const data = run([
-    { meta: { kind: 'image', target: 'backend', ignore_finding: true, scan_ok: false }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
+    { meta: { kind: 'image', target: 'backend', allow_vulnerabilities: true, scan_ok: false }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 0/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);

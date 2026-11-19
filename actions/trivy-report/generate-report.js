@@ -18,11 +18,11 @@ function findings(report, key) {
 
 function blocksMerge(scan) {
   return !scan.scanOk || scan.secrets.length > 0 || scan.misconfigurations.length > 0
-    || (!scan.ignoreFinding && scan.vulnerabilities.length > 0);
+    || (!scan.allowVulnerabilities && scan.vulnerabilities.length > 0);
 }
 
 function allowedVulnerabilities(scan) {
-  return scan.scanOk && scan.ignoreFinding ? scan.vulnerabilities.length : 0;
+  return scan.scanOk && scan.allowVulnerabilities ? scan.vulnerabilities.length : 0;
 }
 
 function vulnerabilityCounts(scan) {
@@ -91,7 +91,7 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
     target: meta.target || 'unknown',
     commitId: meta.commit_id || '',
     commitAuthor: meta.commit_author || '',
-    ignoreFinding: (meta.allow_vulnerabilities ?? meta.ignore_finding) === true,
+    allowVulnerabilities: meta.allow_vulnerabilities === true,
     scanOk: (meta.scan_succeeded ?? meta.scan_ok) === true && validReport,
     vulnerabilities, secrets, misconfigurations,
   };
@@ -112,7 +112,7 @@ const status = totals.failures ? '⚠️ Scan failed' : totalFindings ? '❌ Iss
 const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS FOUND' : 'CLEAN';
 const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
 const cleanScans = scans.length - highlightedScans.length;
-const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.ignoreFinding && scan.vulnerabilities.length > 0);
+const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.allowVulnerabilities && scan.vulnerabilities.length > 0);
 const commitIds = [...new Set(scans.map((scan) => scan.commitId).filter((value) => /^[0-9a-f]{7,40}$/i.test(value)))];
 const commitId = commitIds.length === 1 ? commitIds[0] : '';
 const commitAuthor = [...new Set(scans.map((scan) => scan.commitAuthor).filter(Boolean))].join(', ');
@@ -146,7 +146,7 @@ const summary = [
   markdownTable(['Type', 'Target', 'allow_vulnerabilities', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations (blocking)', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
     const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : scan.misconfigurations.length > 0 ? '❌ Blocking misconfigurations' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`allow_vulnerabilities: true`)';
-    return [markdown(scan.kind), markdown(scan.target), String(scan.ignoreFinding), vulnerabilityCounts(scan), scan.secrets.length, scan.misconfigurations.length, result];
+    return [markdown(scan.kind), markdown(scan.target), String(scan.allowVulnerabilities), vulnerabilityCounts(scan), scan.secrets.length, scan.misconfigurations.length, result];
   })),
 ];
 if (!scans.length) summary.push('No scan results were collected. Check the scan steps.', '');
@@ -214,7 +214,7 @@ const body = [
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
     const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
-    return `${scan.kind.toUpperCase()}: ${scan.target} — allow_vulnerabilities=${scan.ignoreFinding}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, blocking misconfigurations: ${scan.misconfigurations.length} (${result})`;
+    return `${scan.kind.toUpperCase()}: ${scan.target} — allow_vulnerabilities=${scan.allowVulnerabilities}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, blocking misconfigurations: ${scan.misconfigurations.length} (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
   ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
@@ -235,7 +235,7 @@ const cards = [
 ].map(([label, count, decision]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div><div style="font-size:12px">${decision}</div></td>`).join('');
 const rows = highlightedScans.map((scan) => {
   const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
-  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Allow vulnerabilities: ${scan.ignoreFinding}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
+  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Allow vulnerabilities: ${scan.allowVulnerabilities}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
 }).join('');
 const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
 <div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>

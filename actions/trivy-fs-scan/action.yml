@@ -17,10 +17,6 @@ inputs:
   allow_vulnerabilities:
     description: Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail.
     required: false
-    default: ""
-  ignore_finding:
-    description: Allow vulnerabilities when true. Misconfigurations, secrets, and scan errors always fail.
-    required: false
     default: "false"
 
 runs:
@@ -121,7 +117,7 @@ runs:
         HAS_SCOPE: ${{ steps.prepare_scope.outputs.has_scope }}
         PREPARE_OUTCOME: ${{ steps.prepare_scope.outcome }}
         SCAN_OUTCOME: ${{ steps.scan_files.outcome }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
+        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
         SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         SCAN_AUTHOR: ${{ github.actor }}
       run: |

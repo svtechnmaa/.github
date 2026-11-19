@@ -16,10 +16,6 @@ inputs:
   allow_vulnerabilities:
     description: "Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail."
     required: false
-    default: ""
-  ignore_finding:
-    description: "Pass the finding policy to trivy-report. When true, allow vulnerabilities. Misconfigurations, secrets, and scan errors always fail."
-    required: false
     default: "false"
   commit_author_name:
     description: "Name of the commit author to include in the collected scan metadata"
@@ -75,7 +71,7 @@ runs:
         SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
         SCAN_COMMIT: ${{ inputs.commit_id }}
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities || inputs.ignore_finding }}
+        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
         SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

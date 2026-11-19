@@ -124,7 +124,7 @@ test('real report outputs bypass only allowed vulnerabilities, never secrets, mi
     try {
       const dir = path.join(root, 'reports', 'scan');
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ kind: 'image', scan_ok: item.scanOk !== false, ignore_finding: item.ignore }));
+      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ kind: 'image', scan_ok: item.scanOk !== false, allow_vulnerabilities: item.ignore }));
       fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify({ SchemaVersion: 2, Results: [item.findings] }));
       const outputs = generateReport({ REPORT_DIR: path.dirname(dir), GITHUB_OUTPUT: path.join(root, 'output'), GITHUB_STEP_SUMMARY: path.join(root, 'summary') }, root);
       const result = finalize({ FINDING_COUNT: String(outputs.finding_count), GATE_FAILED: String(outputs.gate_failed), REPORT_OUTCOME: outputs.gate_failed ? 'failure' : 'success' });
