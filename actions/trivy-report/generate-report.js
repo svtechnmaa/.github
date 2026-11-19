@@ -245,7 +245,7 @@ const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif
 <p>Misconfigurations, secrets, and scan errors always block. Allowed vulnerabilities do not override these blockers.</p>
 ${totals.failures ? '<p style="padding:12px;background:#ffebe9"><strong>SCAN ERRORS</strong> means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.</p>' : ''}
 <h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
-${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px">TARGET</th><th>VULNS</th><th>SECRETS</th><th>MISCONFIGS</th><th>STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
+${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px 14px">TARGET</th><th style="padding:10px 14px">VULNS</th><th style="padding:10px 14px">SECRETS</th><th style="padding:10px 14px">MISCONFIGS</th><th style="padding:10px 14px">STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
 ${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> applies only to allowed vulnerabilities. They still need review and remediation.</p>' : ''}
 ${totals.secrets ? '<p style="padding:12px;background:#ffebe9"><strong>Secrets always block merging</strong>, even when other findings are allowed.</p>' : ''}
 <p style="margin-top:28px"><a href="${html(runUrl)}" style="display:inline-block;padding:12px 18px;background:#0969da;color:#fff;text-decoration:none;font-weight:700;border-radius:6px">OPEN FULL GITHUB SUMMARY</a></p>
