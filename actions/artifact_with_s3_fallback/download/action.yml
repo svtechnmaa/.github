@@ -5,8 +5,8 @@ inputs:
     description: Name of the artifact to download
     default: artifact
   path:
-    description: Directory where the artifact is restored
-    required: true
+    description: Directory where the artifact is restored; defaults to the workspace
+    default: ${{ github.workspace }}
   s3-access-key:
     description: SeaweedFS access key; only used during fallback
     required: false
@@ -26,6 +26,10 @@ inputs:
     description: Retries per S3 request after the initial attempt; 0 disables retries
     required: false
     default: '3'
+outputs:
+  download-path:
+    description: Absolute path where the artifact was restored
+    value: ${{ steps.download.outputs.download-path || steps.fallback.outputs.download-path }}
 runs:
   using: composite
   steps:
@@ -53,6 +57,7 @@ runs:
         path: ${{ inputs.path }}
 
     - name: Download through SeaweedFS
+      id: fallback
       if: ${{ always() && steps.download.outcome == 'failure' }}
       shell: bash
       env:

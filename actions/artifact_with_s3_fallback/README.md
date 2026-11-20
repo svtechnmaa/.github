@@ -13,7 +13,7 @@ Upload inputs follow [upload-artifact@v7](https://github.com/actions/upload-arti
 | Input | Default | GitHub | SeaweedFS fallback |
 | --- | --- | --- | --- |
 | `name` | `artifact` | Artifact name | Same; with `archive: false`, upload uses the file basename |
-| `path` | Required | File, directory, wildcard, multiline paths and `!exclude`; download destination | Same matching/root layout using `@actions/glob` |
+| `path` | Required for upload; workspace for download | File, directory, wildcard, multiline paths and `!exclude` for upload; destination for download | Same upload matching/root layout using `@actions/glob`; same download destination |
 | `if-no-files-found` | `warn` | `warn`, `error`, `ignore` | If GitHub upload has failed, zero matches always fail the fallback |
 | `retention-days` | `0` | Repository default at 0; otherwise requested retention | Bucket/server TTL remains 60 days; requested value is metadata, not expiration enforcement |
 | `compression-level` | `6` | ZIP level 0–9 | tar without compression at 0; gzip level 1–9 otherwise; ignored for raw uploads |
@@ -32,8 +32,10 @@ and download. Download restores a
 single named artifact and auto-detects its S3 format from object metadata. For a
 raw upload, download by its **file basename**, because the upload `name` was
 ignored. Download does not support fetching all artifacts, patterns of artifact
-names, artifact IDs, or another repository/run. GitHub-specific upload outputs
-are not exposed by this wrapper.
+names, artifact IDs, or another repository/run. Upload exposes GitHub's
+`artifact-id`, `artifact-url` and `artifact-digest` outputs when GitHub stores
+the artifact. Those outputs are empty on S3 fallback. Download exposes
+`download-path` for both backends.
 
 `overwrite` applies independently in each backend: a duplicate GitHub upload can
 fail and trigger S3 fallback. S3 prevents replacement only within the same attempt;

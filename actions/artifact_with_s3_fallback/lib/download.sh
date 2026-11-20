@@ -67,10 +67,11 @@ if [[ "$found" == false ]]; then
   exit 1
 fi
 
-# Match download-artifact's basic tilde expansion.
-if [[ "$ARTIFACT_PATH" == '~' || "$ARTIFACT_PATH" == '~/'* ]]; then
-  ARTIFACT_PATH="$HOME${ARTIFACT_PATH:1}"
-fi
+# Match the native action's input trimming, workspace default and path resolution.
+ARTIFACT_PATH=${ARTIFACT_PATH#"${ARTIFACT_PATH%%[![:space:]]*}"}
+ARTIFACT_PATH=${ARTIFACT_PATH%"${ARTIFACT_PATH##*[![:space:]]}"}
+ARTIFACT_PATH=${ARTIFACT_PATH:-${GITHUB_WORKSPACE:-$PWD}}
+IFS= read -r -d '' ARTIFACT_PATH < <(realpath -msz -- "${ARTIFACT_PATH/#\~/$HOME}")
 if [[ "$format" == raw ]]; then
   mkdir -p -- "$ARTIFACT_PATH"
   cp -- "$archive" "$ARTIFACT_PATH/$ARTIFACT_NAME"
@@ -91,4 +92,6 @@ else
   cp -a "$temp_dir/extracted/." "$ARTIFACT_PATH/"
 fi
 
+delimiter=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+printf 'download-path<<%s\n%s\n%s\n' "$delimiter" "$ARTIFACT_PATH" "$delimiter" >> "$GITHUB_OUTPUT"
 echo "download succeeded: s3://$ARTIFACT_S3_BUCKET/$key"

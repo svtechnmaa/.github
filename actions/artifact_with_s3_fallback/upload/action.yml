@@ -44,6 +44,16 @@ inputs:
     description: Retries per S3 request after the initial attempt; 0 disables retries
     required: false
     default: '3'
+outputs:
+  artifact-id:
+    description: Artifact ID assigned by GitHub; empty for S3 uploads
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-url:
+    description: Artifact URL assigned by GitHub; empty for S3 uploads
+    value: ${{ steps.upload.outputs.artifact-url }}
+  artifact-digest:
+    description: Artifact SHA-256 reported by GitHub; empty for S3 uploads
+    value: ${{ steps.upload.outputs.artifact-digest }}
 runs:
   using: composite
   steps:
