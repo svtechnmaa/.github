@@ -14,9 +14,13 @@ inputs:
     required: false
     default: ""
   allow_vulnerabilities:
-    description: "Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail."
+    description: "Legacy per-scan setting used when ignore_findings_json is empty."
     required: false
     default: "false"
+  ignore_findings_json:
+    description: "Organization IGNORE_FINDINGS JSON map by repository name. When supplied, overrides allow_vulnerabilities."
+    required: false
+    default: ""
   commit_author_name:
     description: "Name of the commit author to include in the collected scan metadata"
     required: true
@@ -27,6 +31,14 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Resolve repository finding policy
+      id: finding_policy
+      shell: bash
+      env:
+        IGNORE_FINDINGS_JSON: ${{ inputs.ignore_findings_json }}
+        LEGACY_ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
+      run: bash "$GITHUB_ACTION_PATH/../trivy-policy/resolve.sh"
+
     - name: Checkout repository
       uses: actions/checkout@v6
 
@@ -71,7 +83,7 @@ runs:
         SCAN_TARGET: ${{ inputs.image_name }}:${{ inputs.image_tag }}
         SCAN_COMMIT: ${{ inputs.commit_id }}
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
+        ALLOW_VULNERABILITIES: ${{ steps.finding_policy.outputs.allow_vulnerabilities }}
         SCAN_OUTCOME: ${{ steps.scan_docker_image.outcome }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
