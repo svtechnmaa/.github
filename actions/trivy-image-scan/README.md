@@ -9,8 +9,7 @@ Scans a Docker image for HIGH and CRITICAL vulnerabilities and secrets. The acti
 | `image_name` | Yes | — | Image name to scan. |
 | `image_tag` | No | `latest` | Image tag to scan. |
 | `trivy_server` | No | Empty | Trivy server URL. Falls back to local scanning if unavailable. |
-| `allow_vulnerabilities` | No | `false` | Existing per-scan setting, used only when `ignore_findings_json` is empty. |
-| `ignore_findings_json` | No | Empty | Pass `${{ vars.IGNORE_FINDINGS }}` from the calling workflow. JSON maps repository names to booleans and takes precedence over `allow_vulnerabilities`. A missing repository defaults to `false`. |
+| `vulnerability_policy` | No | Empty | Pass `${{ vars.IGNORE_FINDINGS }}` from the calling workflow. JSON maps repository names to booleans. A missing repository defaults to `false`. |
 | `commit_author_name` | Yes | — | Author name recorded with this scan. |
 | `commit_id` | Yes | — | Commit ID recorded with this scan. |
 

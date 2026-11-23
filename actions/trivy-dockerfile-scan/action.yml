@@ -10,12 +10,8 @@ inputs:
     description: "Trivy server URL (if using server mode)"
     required: false
     default: ""
-  allow_vulnerabilities:
-    description: "Legacy per-scan setting used when ignore_findings_json is empty."
-    required: false
-    default: "false"
-  ignore_findings_json:
-    description: "Organization IGNORE_FINDINGS JSON map by repository name. When supplied, overrides allow_vulnerabilities."
+  vulnerability_policy:
+    description: "Organization IGNORE_FINDINGS JSON map of repository names to booleans. Only vulnerability findings may be allowed."
     required: false
     default: ""
   commit_author_name:
@@ -32,9 +28,8 @@ runs:
       id: finding_policy
       shell: bash
       env:
-        IGNORE_FINDINGS_JSON: ${{ inputs.ignore_findings_json }}
-        LEGACY_ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
-      run: bash "$GITHUB_ACTION_PATH/../../scripts/resolve-trivy-policy.sh"
+        IGNORE_FINDINGS_JSON: ${{ inputs.vulnerability_policy }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/read-vulnerability-policy.sh"
 
     - name: Scan Dockerfile build context
       id: scan_dockerfile

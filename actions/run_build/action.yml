@@ -52,10 +52,10 @@ inputs:
     description: Trivy server URL. The image scan falls back to a local scan when unavailable.
     required: false
     default: ""
-  allow_vulnerabilities:
-    description: Allow HIGH/CRITICAL vulnerability findings. Misconfigurations, secrets, and scan failures still block.
+  vulnerability_policy:
+    description: Organization IGNORE_FINDINGS JSON map of repository names to booleans. Only vulnerability findings may be allowed.
     required: false
-    default: "false"
+    default: ""
 
 outputs:
   check_no_ci:
@@ -283,7 +283,7 @@ runs:
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         trivy_server: ${{ inputs.trivy_server }}
-        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities }}
+        vulnerability_policy: ${{ inputs.vulnerability_policy }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
 
@@ -296,7 +296,7 @@ runs:
       uses: svtechnmaa/.github/actions/trivy-image-scan@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
-        allow_vulnerabilities: ${{ inputs.allow_vulnerabilities }}
+        vulnerability_policy: ${{ inputs.vulnerability_policy }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
