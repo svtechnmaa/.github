@@ -34,7 +34,7 @@ runs:
       env:
         IGNORE_FINDINGS_JSON: ${{ inputs.ignore_findings_json }}
         LEGACY_ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
-      run: bash "$GITHUB_ACTION_PATH/../trivy-policy/resolve.sh"
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/resolve-trivy-policy.sh"
 
     - name: Scan Dockerfile build context
       id: scan_dockerfile
