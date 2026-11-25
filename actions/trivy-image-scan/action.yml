@@ -34,9 +34,6 @@ runs:
         IGNORE_FINDINGS_JSON: ${{ inputs.vulnerability_policy }}
       run: bash "$GITHUB_ACTION_PATH/../../scripts/read-vulnerability-policy.sh"
 
-    - name: Checkout repository
-      uses: actions/checkout@v6
-
     - name: Scan Docker image
       id: scan_docker_image
       shell: bash
