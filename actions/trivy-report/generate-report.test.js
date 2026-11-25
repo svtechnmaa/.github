@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { generateReport } = require('./generate-report');
 
-function run(scans) {
+function run(scans, runAttempt = '1') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trivy-report-test-'));
   const reportDir = path.join(root, 'reports');
   fs.mkdirSync(reportDir);
@@ -23,7 +23,7 @@ function run(scans) {
       GITHUB_OUTPUT: output,
       GITHUB_STEP_SUMMARY: summary,
       GITHUB_RUN_ID: '123',
-      GITHUB_RUN_ATTEMPT: '1',
+      GITHUB_RUN_ATTEMPT: runAttempt,
       GITHUB_REPOSITORY: 'svtechnmaa/svtech_report',
       GITHUB_SERVER_URL: 'https://github.com',
     }, root);
@@ -50,7 +50,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
     { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
     { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'app:first', Secrets: [secret] }] } },
     { meta: { kind: 'image', target: 'app:second', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [] } },
-  ]);
+  ], '2');
   assert.equal(data.values.scan_count, '3');
   assert.equal(data.values.finding_count, '2');
   assert.equal(data.values.gate_failed, 'true');
@@ -65,7 +65,12 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.summary, /## 3\. Findings/);
   assert.match(data.summary, /\[CVE-2026-1\]\(https:\/\/example\.com\/CVE-2026-1\)/);
   assert.match(data.summary, /Fixed in/);
-  assert.match(data.summary, /allow_vulnerabilities: true/);
+  assert.match(data.summary, /Secrets always block the Trivy scan gate/);
+  assert.doesNotMatch(data.summary, /allow_vulnerabilities/);
+  assert.match(data.summary, /actions\/runs\/123\/attempts\/2/);
+  assert.match(data.mail, /FULL REPORT \(ATTEMPT 2\): https:\/\/github\.com\/svtechnmaa\/svtech_report\/actions\/runs\/123\/attempts\/2/);
+  assert.match(data.htmlMail, /href="https:\/\/github\.com\/svtechnmaa\/svtech_report\/actions\/runs\/123\/attempts\/2"/);
+  assert.match(data.htmlMail, /<strong>Run attempt:<\/strong> 2/);
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
@@ -101,14 +106,14 @@ test('scan errors remain blocking even when allow_vulnerabilities is true', () =
   assert.match(data.htmlMail, /<strong>SCAN ERRORS<\/strong> means a scan did not finish/);
 });
 
-test('allowed vulnerabilities do not block merging', () => {
+test('allowed vulnerabilities do not block the scan gate', () => {
   const data = run([
     { meta: { kind: 'filesystem', target: 'changed files', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-  assert.match(data.summary, /Findings allowed/);
+  assert.match(data.summary, /⚠️ Vulnerabilities allowed/);
   assert.match(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
 });
 
@@ -134,12 +139,12 @@ for (const kind of ['filesystem', 'dockerfile', 'image']) {
         assert.equal(data.values.finding_count, String(Number(hasVulnerability) + Number(hasMisconfiguration) + Number(hasSecret)));
         if (blocking) {
           assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
-          assert.doesNotMatch(data.summary, /Findings allowed/);
+          assert.doesNotMatch(data.summary, /⚠️ Vulnerabilities allowed/);
           assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
           assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
         } else if (hasFindings) {
           assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-          assert.match(data.summary, /Findings allowed/);
+          assert.match(data.summary, /⚠️ Vulnerabilities allowed/);
         } else {
           assert.match(data.summary, /Clean/);
         }
@@ -160,7 +165,7 @@ test('secrets always block even in an allowed scan, with or without other findin
     assert.match(data.summary, /Blocking secrets/);
     assert.match(data.mail, /BLOCKING SECRETS/);
     assert.match(data.htmlMail, /BLOCKING SECRETS/);
-    assert.doesNotMatch(data.summary, /Findings allowed/);
+    assert.doesNotMatch(data.summary, /⚠️ Vulnerabilities allowed/);
     assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
     assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
     for (const output of [data.summary, data.mail, data.htmlMail]) assert.doesNotMatch(output, /PRIVATE_SECRET_VALUE/);
@@ -198,9 +203,9 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
   assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
   assert.match(data.summary, /\| 🛡️ Vulnerabilities \(HIGH, CRITICAL\) \| 2 \| 1 \| 1 \|/);
   assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
-  assert.match(data.summary, /\| backend \| true \| 1 \(1 allowed, 0 blocking\)/);
-  assert.match(data.summary, /\| frontend \| false \| 1 \(0 allowed, 1 blocking\)/);
-  assert.match(data.summary, /ALLOWED — allow_vulnerabilities=true/);
+  assert.match(data.summary, /\| backend \| Yes \| 1 \(1 allowed, 0 blocking\)/);
+  assert.match(data.summary, /\| frontend \| No \| 1 \(0 allowed, 1 blocking\)/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
   assert.match(data.summary, /❌ BLOCKING/);
   assert.match(data.summary, /❌ ALWAYS BLOCKING/);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 1/);
@@ -216,7 +221,7 @@ test('scan failures cannot present their vulnerability results as allowed', () =
   ]);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 0/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
-  assert.doesNotMatch(data.summary, /ALLOWED — allow_vulnerabilities=true/);
+  assert.doesNotMatch(data.summary, /ALLOWED BY SCAN POLICY/);
 });
 
 test('missing results do not produce a clean report', () => {
