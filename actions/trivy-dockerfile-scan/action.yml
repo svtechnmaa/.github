@@ -24,8 +24,8 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Resolve repository finding policy
-      id: finding_policy
+    - name: Read repository vulnerability policy
+      id: vulnerability_policy
       shell: bash
       env:
         IGNORE_FINDINGS_JSON: ${{ inputs.vulnerability_policy }}
@@ -79,7 +79,7 @@ runs:
         SCAN_TARGET: ${{ inputs.dockerfile_path }}
         SCAN_COMMIT: ${{ inputs.commit_id }}
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
-        ALLOW_VULNERABILITIES: ${{ steps.finding_policy.outputs.allow_vulnerabilities }}
+        ALLOW_VULNERABILITIES: ${{ steps.vulnerability_policy.outputs.allow_vulnerabilities }}
         SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

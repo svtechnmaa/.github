@@ -9,7 +9,7 @@ Scans files changed in the pull request and collects results for `trivy-report`.
 | `trivy_server` | No | Empty | Trivy server URL. Local scanning is used if the server is unavailable. |
 | `severity` | No | `CRITICAL,HIGH` | Comma-separated severity levels to scan. |
 | `scanners` | No | `secret,misconfig,vuln` | Comma-separated Trivy scanners. |
-| `allow_vulnerabilities` | No | `false` | Allows vulnerability findings. Misconfigurations, secrets, and scan errors still block. |
+| `vulnerability_policy` | No | Empty | Pass `${{ vars.IGNORE_FINDINGS }}` from the calling workflow. JSON maps repository names to booleans; a missing repository defaults to `false`. Only vulnerabilities may be allowed. |
 
 ## Results
 

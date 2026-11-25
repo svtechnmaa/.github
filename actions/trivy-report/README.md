@@ -18,7 +18,7 @@ Call this action once after the Trivy scan actions. It reads their collected res
 | `notification_required` | `true` if findings or scan errors require an email. |
 | `notification_artifact_name` | Artifact containing `trivy-mail.html`, `trivy-mail.txt`, and `trivy-mail-details.json`. |
 
-With `allow_vulnerabilities: true`, vulnerabilities remain visible in the Summary and email but do not block the scan gate. Misconfigurations, secrets, and scan errors always block. Clean scans produce a Summary but no email artifact. Legacy output names remain available during migration.
+When the scan policy allows vulnerabilities, they remain visible in the Summary and email but do not block the scan gate. Misconfigurations, secrets, and scan errors always block. Clean scans produce a Summary but no email artifact. Legacy output names remain available during migration.
 
 The Summary and email distinguish allowed and blocking vulnerabilities, show each
 target's policy, and label every finding's gate decision in the detailed Summary.

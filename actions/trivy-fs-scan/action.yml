@@ -14,14 +14,21 @@ inputs:
     description: Comma-separated Trivy scanners to enable.
     required: false
     default: secret,misconfig,vuln
-  allow_vulnerabilities:
-    description: Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail.
+  vulnerability_policy:
+    description: Organization IGNORE_FINDINGS JSON map of repository names to booleans. Only vulnerability findings may be allowed.
     required: false
-    default: "false"
+    default: ""
 
 runs:
   using: composite
   steps:
+    - name: Read repository vulnerability policy
+      id: vulnerability_policy
+      shell: bash
+      env:
+        IGNORE_FINDINGS_JSON: ${{ inputs.vulnerability_policy }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/read-vulnerability-policy.sh"
+
     - name: Update Helm dependencies
       shell: bash
       run: |
@@ -117,7 +124,7 @@ runs:
         HAS_SCOPE: ${{ steps.prepare_scope.outputs.has_scope }}
         PREPARE_OUTCOME: ${{ steps.prepare_scope.outcome }}
         SCAN_OUTCOME: ${{ steps.scan_files.outcome }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
+        ALLOW_VULNERABILITIES: ${{ steps.vulnerability_policy.outputs.allow_vulnerabilities }}
         SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         SCAN_AUTHOR: ${{ github.actor }}
       run: |
