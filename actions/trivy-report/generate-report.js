@@ -42,7 +42,7 @@ function misconfigurationCounts(scan) {
 
 function exceptionLabel(scan, category) {
   const detail = scan.exceptionDetails?.[category];
-  if (detail?.status === 'expired') return `Expired on ${detail.expires_at} (Vietnam time): ${detail.description}`;
+  if (detail?.status === 'expired') return `Expired after ${detail.expires_at} (Vietnam time): ${detail.description}`;
   if (detail?.status === 'active') return `Allowed through ${detail.expires_at} (Vietnam time): ${detail.description}`;
   const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
   return allowed ? 'Allowed' : 'Blocking by default';
@@ -51,7 +51,7 @@ function exceptionLabel(scan, category) {
 function findingDecision(scan, category) {
   const detail = scan.exceptionDetails?.[category];
   if (!scan.scanOk) return '❌ SCAN FAILED — NOT ALLOWED';
-  if (detail?.status === 'expired') return `❌ EXCEPTION EXPIRED ${detail.expires_at} — BLOCKING`;
+  if (detail?.status === 'expired') return `❌ EXCEPTION EXPIRED AFTER ${detail.expires_at} — BLOCKING`;
   const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
   return allowed ? '⚠️ ALLOWED BY SCAN POLICY' : '❌ BLOCKING';
 }

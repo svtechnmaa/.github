@@ -146,10 +146,10 @@ test('expired exceptions explain why formerly allowed findings now block', () =>
     report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-DS-0002', Severity: 'HIGH' }] }] },
   }]);
   assert.equal(data.values.gate_failed, 'true');
-  assert.match(data.summary, /EXCEPTION EXPIRED 2027-01-31 — BLOCKING/);
-  assert.match(data.summary, /EXCEPTION EXPIRED 2027-02-28 — BLOCKING/);
+  assert.match(data.summary, /EXCEPTION EXPIRED AFTER 2027-01-31 — BLOCKING/);
+  assert.match(data.summary, /EXCEPTION EXPIRED AFTER 2027-02-28 — BLOCKING/);
   assert.match(data.summary, /Dockerfile hardening &lt;pending&gt;/);
-  assert.match(data.mail, /Expired on 2027-02-28 \(Vietnam time\)/);
+  assert.match(data.mail, /Expired after 2027-02-28 \(Vietnam time\)/);
   assert.match(data.htmlMail, /Dockerfile hardening &lt;pending&gt;/);
   assert.doesNotMatch(data.htmlMail, /Dockerfile hardening <pending>/);
 });
