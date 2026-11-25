@@ -76,7 +76,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.htmlMail, /<strong>3 scans/);
   assert.match(data.mailMetadata.subject, /\[TRIVY\]\[ACTION REQUIRED\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
-  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities/);
+  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities or misconfigurations/);
   assert.match(data.summary, /Blocking secrets/);
   assert.match(data.mail, /BLOCKING SECRETS/);
   assert.match(data.htmlMail, /BLOCKING SECRETS/);
@@ -113,8 +113,52 @@ test('allowed vulnerabilities do not block the scan gate', () => {
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-  assert.match(data.summary, /⚠️ Vulnerabilities allowed/);
+  assert.match(data.summary, /⚠️ Findings allowed/);
   assert.match(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
+});
+
+test('allowed misconfigurations remain visible without blocking the scan gate', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH', Title: 'Running as root' };
+  const data = run([{
+    meta: { kind: 'dockerfile', target: 'Dockerfile', allow_misconfigurations: true, scan_ok: true },
+    report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'false');
+  assert.equal(data.values.send_mail, 'true');
+  assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
+  assert.match(data.summary, /Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 1 \| 0/);
+  assert.match(data.summary, /AVD-DS-0002/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
+  assert.match(data.mail, /ALLOWED MISCONFIGURATIONS: 1/);
+  assert.match(data.htmlMail, /1 allowed · 0 blocking/);
+});
+
+test('allowed misconfigurations never bypass secrets, disallowed vulnerabilities, or scan errors', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH' };
+  for (const item of [
+    { findings: { Misconfigurations: [misconfiguration], Secrets: [secret] } },
+    { findings: { Misconfigurations: [misconfiguration], Vulnerabilities: [vulnerability] } },
+    { findings: { Misconfigurations: [misconfiguration] }, scan_ok: false },
+  ]) {
+    const data = run([{
+      meta: { kind: 'dockerfile', allow_misconfigurations: true, scan_ok: item.scan_ok !== false },
+      report: { SchemaVersion: 2, Results: [item.findings] },
+    }]);
+    assert.equal(data.values.gate_failed, 'true');
+    assert.match(data.mailMetadata.subject, /\[(ACTION REQUIRED|SCAN FAILED)\]/);
+  }
+});
+
+test('misconfiguration permission applies only to the scan with that policy', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH' };
+  const data = run([
+    { meta: { kind: 'dockerfile', target: 'backend/Dockerfile', allow_misconfigurations: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] } },
+    { meta: { kind: 'dockerfile', target: 'frontend/Dockerfile', scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] } },
+  ]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.match(data.summary, /Misconfigurations \(HIGH, CRITICAL\) \| 2 \| 1 \| 1/);
+  assert.match(data.mail, /ALLOWED MISCONFIGURATIONS: 1/);
+  assert.match(data.mail, /BLOCKING MISCONFIGURATIONS: 1/);
 });
 
 for (const kind of ['filesystem', 'dockerfile', 'image']) {
@@ -139,12 +183,12 @@ for (const kind of ['filesystem', 'dockerfile', 'image']) {
         assert.equal(data.values.finding_count, String(Number(hasVulnerability) + Number(hasMisconfiguration) + Number(hasSecret)));
         if (blocking) {
           assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
-          assert.doesNotMatch(data.summary, /⚠️ Vulnerabilities allowed/);
+          assert.doesNotMatch(data.summary, /⚠️ Findings allowed/);
           assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
           assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
         } else if (hasFindings) {
           assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-          assert.match(data.summary, /⚠️ Vulnerabilities allowed/);
+          assert.match(data.summary, /⚠️ Findings allowed/);
         } else {
           assert.match(data.summary, /Clean/);
         }
@@ -165,7 +209,7 @@ test('secrets always block even in an allowed scan, with or without other findin
     assert.match(data.summary, /Blocking secrets/);
     assert.match(data.mail, /BLOCKING SECRETS/);
     assert.match(data.htmlMail, /BLOCKING SECRETS/);
-    assert.doesNotMatch(data.summary, /⚠️ Vulnerabilities allowed/);
+    assert.doesNotMatch(data.summary, /⚠️ Findings allowed/);
     assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
     assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
     for (const output of [data.summary, data.mail, data.htmlMail]) assert.doesNotMatch(output, /PRIVATE_SECRET_VALUE/);
@@ -180,9 +224,9 @@ test('allowed vulnerabilities in one scan cannot bypass misconfigurations in ano
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
-  assert.match(data.summary, /Blocking misconfigurations/);
-  assert.match(data.mail, /BLOCKING MISCONFIGURATIONS/);
-  assert.match(data.htmlMail, /BLOCKING MISCONFIGURATIONS/);
+  assert.match(data.summary, /1 misconfigurations, 0 secrets/);
+  assert.match(data.mail, /BLOCKING FINDINGS/);
+  assert.match(data.htmlMail, /ACTION REQUIRED/);
 });
 
 test('invalid reports remain blocking even when scan metadata permits vulnerabilities', () => {
@@ -203,11 +247,11 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
   assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
   assert.match(data.summary, /\| 🛡️ Vulnerabilities \(HIGH, CRITICAL\) \| 2 \| 1 \| 1 \|/);
   assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
-  assert.match(data.summary, /\| backend \| Yes \| 1 \(1 allowed, 0 blocking\)/);
-  assert.match(data.summary, /\| frontend \| No \| 1 \(0 allowed, 1 blocking\)/);
+  assert.match(data.summary, /\| backend \| Yes \| No \| 1 \(1 allowed, 0 blocking\)/);
+  assert.match(data.summary, /\| frontend \| No \| No \| 1 \(0 allowed, 1 blocking\)/);
   assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
   assert.match(data.summary, /❌ BLOCKING/);
-  assert.match(data.summary, /❌ ALWAYS BLOCKING/);
+  assert.match(data.summary, /❌ BLOCKING/);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 1/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
   assert.match(data.htmlMail, /1 allowed · 1 blocking/);

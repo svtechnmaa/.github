@@ -21,7 +21,7 @@ outputs:
     description: Number of collected scans.
     value: ${{ steps.report.outputs.scan_count }}
   gate_failed:
-    description: Whether a scan failed, secrets or misconfigurations were found, or vulnerabilities were not allowed.
+    description: Whether a scan failed or found secrets, disallowed vulnerabilities, or disallowed misconfigurations.
     value: ${{ steps.report.outputs.gate_failed }}
   send_mail:
     description: Whether findings or scan failures require an email.

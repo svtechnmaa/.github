@@ -53,7 +53,11 @@ inputs:
     required: false
     default: ""
   vulnerability_policy:
-    description: Organization IGNORE_FINDINGS JSON map of repository names to booleans. Only vulnerability findings may be allowed.
+    description: Organization ALLOW_VULNERABILITIES JSON map of repository names to booleans.
+    required: false
+    default: ""
+  misconfiguration_policy:
+    description: Organization ALLOW_MISSCONFIGURATIONS JSON map of repository names to booleans.
     required: false
     default: ""
 
@@ -284,6 +288,7 @@ runs:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         trivy_server: ${{ inputs.trivy_server }}
         vulnerability_policy: ${{ inputs.vulnerability_policy }}
+        misconfiguration_policy: ${{ inputs.misconfiguration_policy }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
 
@@ -297,6 +302,7 @@ runs:
       with:
         trivy_server: ${{ inputs.trivy_server }}
         vulnerability_policy: ${{ inputs.vulnerability_policy }}
+        misconfiguration_policy: ${{ inputs.misconfiguration_policy }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}

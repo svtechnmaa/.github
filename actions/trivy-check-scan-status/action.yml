@@ -1,5 +1,5 @@
 name: Check Trivy Scan Status
-description: Finish a build job with a visible failure only when vulnerabilities were explicitly allowed and all preceding work succeeded.
+description: Finish a build job with a visible failure only when Trivy findings were explicitly allowed and all preceding work succeeded.
 
 inputs:
   job_status:
@@ -19,7 +19,7 @@ inputs:
 
 outputs:
   scan_bypassed:
-    description: True only when this action intentionally fails an otherwise successful job for allowed vulnerabilities.
+    description: True only when this action intentionally fails an otherwise successful job for allowed Trivy findings.
     value: ${{ steps.status.outputs.scan_bypassed }}
 
 runs:

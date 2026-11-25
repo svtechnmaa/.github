@@ -6,7 +6,7 @@ jobs that must be checked. Pass `jobs: ${{ toJSON(needs) }}`.
 | Job result | Aggregate result |
 | --- | --- |
 | `success` or `skipped` | Accepted, preserving existing skip behavior |
-| `failure` with output `scan_bypassed` exactly equal to string `true` | Accepted intentional Trivy vulnerability failure |
+| `failure` with output `scan_bypassed` exactly equal to string `true` | Accepted intentional Trivy finding failure |
 | Any other `failure` | Fail |
 | `cancelled`, unknown result, or malformed job JSON | Fail |
 
