@@ -20,6 +20,27 @@ Call this action once after the Trivy scan actions. It reads their collected res
 
 Vulnerabilities and misconfigurations can be allowed independently by repository policy. Allowed findings remain visible in the Summary and email but do not block the scan gate. Secrets and scan errors always block. Clean scans produce a Summary but no email artifact. Legacy output names remain available during migration.
 
+## Finding policy
+
+The calling workflow passes one organization variable as `finding_policy: ${{ vars.TRIVY_FINDING_POLICY }}` to each scan action. Only configured exceptions are allowed:
+
+```json
+{
+  "svtech_report": {
+    "vulnerabilities": {
+      "expires_at": "2027-03-31",
+      "description": "Legacy dependencies pending upgrade"
+    },
+    "misconfigurations": {
+      "expires_at": "2027-02-28",
+      "description": "Legacy Dockerfile pending hardening"
+    }
+  }
+}
+```
+
+The exception applies through the named date in `Asia/Ho_Chi_Minh`; it blocks again from 00:00 on the following day. An absent repository or category blocks by default. The selected repository's entry must contain only the two category names above; each present category requires a real `YYYY-MM-DD` date and a nonempty description. Invalid entries fail policy evaluation. Expired exceptions remain visible in the Summary and email when findings exist. Updating the variable does not rerun existing PR checks.
+
 The Summary and email distinguish allowed and blocking findings, show each
 target's policy, and label every finding's gate decision in the detailed Summary.
 The scan gate can remain blocked by other findings even when

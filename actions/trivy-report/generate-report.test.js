@@ -133,6 +133,41 @@ test('allowed misconfigurations remain visible without blocking the scan gate', 
   assert.match(data.htmlMail, /1 allowed · 0 blocking/);
 });
 
+test('expired exceptions explain why formerly allowed findings now block', () => {
+  const data = run([{
+    meta: {
+      kind: 'dockerfile', target: 'Dockerfile', scan_ok: true,
+      allow_vulnerabilities: false, allow_misconfigurations: false,
+      exception_details: {
+        vulnerabilities: { status: 'expired', expires_at: '2027-01-31', description: 'Dependency upgrade pending' },
+        misconfigurations: { status: 'expired', expires_at: '2027-02-28', description: 'Dockerfile hardening <pending>' },
+      },
+    },
+    report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-DS-0002', Severity: 'HIGH' }] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.match(data.summary, /EXCEPTION EXPIRED 2027-01-31 — BLOCKING/);
+  assert.match(data.summary, /EXCEPTION EXPIRED 2027-02-28 — BLOCKING/);
+  assert.match(data.summary, /Dockerfile hardening &lt;pending&gt;/);
+  assert.match(data.mail, /Expired on 2027-02-28 \(Vietnam time\)/);
+  assert.match(data.htmlMail, /Dockerfile hardening &lt;pending&gt;/);
+  assert.doesNotMatch(data.htmlMail, /Dockerfile hardening <pending>/);
+});
+
+test('active exception reports its expiration and reason without hiding findings', () => {
+  const data = run([{
+    meta: {
+      kind: 'dockerfile', target: 'Dockerfile', scan_ok: true, allow_misconfigurations: true,
+      exception_details: { misconfigurations: { status: 'active', expires_at: '2099-12-31', description: 'Pending hardening' } },
+    },
+    report: { SchemaVersion: 2, Results: [{ Misconfigurations: [{ ID: 'AVD-DS-0002', Severity: 'HIGH' }] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'false');
+  assert.match(data.summary, /Allowed through 2099-12-31 \(Vietnam time\): Pending hardening/);
+  assert.match(data.htmlMail, /Allowed through 2099-12-31 \(Vietnam time\): Pending hardening/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
+});
+
 test('allowed misconfigurations never bypass secrets, disallowed vulnerabilities, or scan errors', () => {
   const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH' };
   for (const item of [
@@ -247,8 +282,8 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
   assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
   assert.match(data.summary, /\| 🛡️ Vulnerabilities \(HIGH, CRITICAL\) \| 2 \| 1 \| 1 \|/);
   assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
-  assert.match(data.summary, /\| backend \| Yes \| No \| 1 \(1 allowed, 0 blocking\)/);
-  assert.match(data.summary, /\| frontend \| No \| No \| 1 \(0 allowed, 1 blocking\)/);
+  assert.match(data.summary, /\| backend \| Allowed \| Blocking by default \| 1 \(1 allowed, 0 blocking\)/);
+  assert.match(data.summary, /\| frontend \| Blocking by default \| Blocking by default \| 1 \(0 allowed, 1 blocking\)/);
   assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
   assert.match(data.summary, /❌ BLOCKING/);
   assert.match(data.summary, /❌ BLOCKING/);

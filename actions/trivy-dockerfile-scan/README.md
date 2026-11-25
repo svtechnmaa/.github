@@ -8,8 +8,7 @@ Scans a Dockerfile's build context for HIGH and CRITICAL vulnerabilities, secret
 | --- | --- | --- | --- |
 | `dockerfile_path` | No | `./Dockerfile` | Dockerfile to scan; its directory is the build context. |
 | `trivy_server` | No | Empty | Trivy server URL. Falls back to local scanning if unavailable. |
-| `vulnerability_policy` | No | Empty | Pass `${{ vars.ALLOW_VULNERABILITIES }}` from the calling workflow. JSON maps repository names to booleans. A missing repository defaults to `false`. |
-| `misconfiguration_policy` | No | Empty | Pass `${{ vars.ALLOW_MISSCONFIGURATIONS }}` from the calling workflow. The same JSON format independently allows misconfigurations. |
+| `finding_policy` | No | Empty | Pass `${{ vars.TRIVY_FINDING_POLICY }}` from the calling workflow. The JSON selects this repository and independently evaluates expiring vulnerability and misconfiguration exceptions. |
 | `commit_author_name` | Yes | — | Author name recorded with this scan. |
 | `commit_id` | Yes | — | Commit ID recorded with this scan. |
 
@@ -17,4 +16,4 @@ Scans a Dockerfile's build context for HIGH and CRITICAL vulnerabilities, secret
 
 The action has no declared outputs. It saves `report.json` and `meta.json` under `$RUNNER_TEMP/trivy-collect/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/scan.<random>/`. `trivy-report` reads these files. The workflow must upload and download this directory when scans run in separate jobs.
 
-Vulnerabilities and misconfigurations can be allowed independently. Secrets, scan errors, and invalid policy JSON always fail the scan gate. Allowed findings remain in the report.
+Vulnerabilities and misconfigurations can be allowed independently until the end of each exception's `expires_at` date in `Asia/Ho_Chi_Minh`. Secrets, scan errors, and invalid policy entries always fail the scan gate. Allowed findings remain in the report. See `trivy-report` for the JSON schema.

@@ -40,6 +40,22 @@ function misconfigurationCounts(scan) {
   return `${scan.misconfigurations.length} (${allowed} allowed, ${scan.misconfigurations.length - allowed} blocking)`;
 }
 
+function exceptionLabel(scan, category) {
+  const detail = scan.exceptionDetails?.[category];
+  if (detail?.status === 'expired') return `Expired on ${detail.expires_at} (Vietnam time): ${detail.description}`;
+  if (detail?.status === 'active') return `Allowed through ${detail.expires_at} (Vietnam time): ${detail.description}`;
+  const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
+  return allowed ? 'Allowed' : 'Blocking by default';
+}
+
+function findingDecision(scan, category) {
+  const detail = scan.exceptionDetails?.[category];
+  if (!scan.scanOk) return '❌ SCAN FAILED — NOT ALLOWED';
+  if (detail?.status === 'expired') return `❌ EXCEPTION EXPIRED ${detail.expires_at} — BLOCKING`;
+  const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
+  return allowed ? '⚠️ ALLOWED BY SCAN POLICY' : '❌ BLOCKING';
+}
+
 function clean(value) {
   return String(value ?? '-').replace(/[\r\n|]/g, ' ');
 }
@@ -103,6 +119,7 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
     commitAuthor: meta.commit_author || '',
     allowVulnerabilities: meta.allow_vulnerabilities === true,
     allowMisconfigurations: meta.allow_misconfigurations === true,
+    exceptionDetails: meta.exception_details && typeof meta.exception_details === 'object' ? meta.exception_details : {},
     scanOk: (meta.scan_succeeded ?? meta.scan_ok) === true && validReport,
     vulnerabilities, secrets, misconfigurations,
   };
@@ -156,10 +173,10 @@ const summary = [
   '',
   '## 2. Scanned targets',
   '',
-  markdownTable(['Type', 'Target', 'Vulnerabilities allowed', 'Misconfigurations allowed', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations', 'Result'], scans.map((scan) => {
+  markdownTable(['Type', 'Target', 'Vulnerability policy', 'Misconfiguration policy', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
     const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed';
-    return [markdown(scan.kind), markdown(scan.target), scan.allowVulnerabilities ? 'Yes' : 'No', scan.allowMisconfigurations ? 'Yes' : 'No', vulnerabilityCounts(scan), scan.secrets.length, misconfigurationCounts(scan), result];
+    return [markdown(scan.kind), markdown(scan.target), markdown(exceptionLabel(scan, 'vulnerabilities')), markdown(exceptionLabel(scan, 'misconfigurations')), vulnerabilityCounts(scan), scan.secrets.length, misconfigurationCounts(scan), result];
   })),
 ];
 if (!scans.length) summary.push('No scan results were collected. Check the scan steps.', '');
@@ -168,7 +185,7 @@ if (totalFindings > 0) summary.push('## 3. Findings', '');
 const vulnerabilityRows = scans.flatMap((scan) => scan.vulnerabilities.map((finding) => [
   markdown(scan.target), markdown(finding.Severity), findingLink(finding.VulnerabilityID || 'Unknown', finding.PrimaryURL),
   markdown(finding.PkgName), markdown(finding.InstalledVersion), markdown(finding.FixedVersion), markdown(finding.target),
-  allowedVulnerabilities(scan) > 0 ? '⚠️ ALLOWED BY SCAN POLICY' : '❌ BLOCKING',
+  findingDecision(scan, 'vulnerabilities'),
 ]));
 if (vulnerabilityRows.length) {
   summary.push(`### 🛡️ Vulnerabilities (${vulnerabilityRows.length})`, '', `<details><summary>View all ${vulnerabilityRows.length} vulnerability finding(s)</summary>`, '',
@@ -177,7 +194,7 @@ if (vulnerabilityRows.length) {
 const misconfigurationRows = scans.flatMap((scan) => scan.misconfigurations.map((finding) => [
   markdown(scan.target), markdown(finding.Severity), findingLink(finding.ID || 'Unknown', finding.PrimaryURL),
   markdown(finding.Title), markdown(finding.target), markdown(finding.CauseMetadata?.StartLine), markdown(finding.Resolution),
-  allowedMisconfigurations(scan) > 0 ? '⚠️ ALLOWED BY SCAN POLICY' : '❌ BLOCKING',
+  findingDecision(scan, 'misconfigurations'),
 ]));
 if (misconfigurationRows.length) {
   summary.push(`### ⚙️ Misconfigurations (${misconfigurationRows.length})`, '', `<details><summary>View all ${misconfigurationRows.length} misconfiguration finding(s)</summary>`, '',
@@ -229,7 +246,7 @@ const body = [
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
     const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
-    return `${scan.kind.toUpperCase()}: ${scan.target} — vulnerabilities allowed: ${scan.allowVulnerabilities ? 'yes' : 'no'}; misconfigurations allowed: ${scan.allowMisconfigurations ? 'yes' : 'no'}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, misconfigurations: ${misconfigurationCounts(scan)} (${result})`;
+    return `${scan.kind.toUpperCase()}: ${scan.target} — vulnerability policy: ${exceptionLabel(scan, 'vulnerabilities')}; misconfiguration policy: ${exceptionLabel(scan, 'misconfigurations')}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, misconfigurations: ${misconfigurationCounts(scan)} (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
   ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
@@ -250,7 +267,7 @@ const cards = [
 ].map(([label, count, decision]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div><div style="font-size:12px">${decision}</div></td>`).join('');
 const rows = highlightedScans.map((scan) => {
   const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
-  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Allow vulnerabilities: ${scan.allowVulnerabilities}<br>Allow misconfigurations: ${scan.allowMisconfigurations}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${misconfigurationCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
+  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Vulnerability policy: ${html(exceptionLabel(scan, 'vulnerabilities'))}<br>Misconfiguration policy: ${html(exceptionLabel(scan, 'misconfigurations'))}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${misconfigurationCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
 }).join('');
 const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
 <div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div><div><strong>Run attempt:</strong> ${html(runAttempt)}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>

@@ -9,8 +9,7 @@ Scans files changed in the pull request and collects results for `trivy-report`.
 | `trivy_server` | No | Empty | Trivy server URL. Local scanning is used if the server is unavailable. |
 | `severity` | No | `CRITICAL,HIGH` | Comma-separated severity levels to scan. |
 | `scanners` | No | `secret,misconfig,vuln` | Comma-separated Trivy scanners. |
-| `vulnerability_policy` | No | Empty | Pass `${{ vars.ALLOW_VULNERABILITIES }}` from the calling workflow. JSON maps repository names to booleans; a missing repository defaults to `false`. |
-| `misconfiguration_policy` | No | Empty | Pass `${{ vars.ALLOW_MISSCONFIGURATIONS }}` from the calling workflow. The same JSON format independently allows misconfigurations. |
+| `finding_policy` | No | Empty | Pass `${{ vars.TRIVY_FINDING_POLICY }}` from the calling workflow. JSON selects this repository and independently evaluates expiring vulnerability and misconfiguration exceptions. |
 
 ## Results
 

@@ -52,12 +52,8 @@ inputs:
     description: Trivy server URL. The image scan falls back to a local scan when unavailable.
     required: false
     default: ""
-  vulnerability_policy:
-    description: Organization ALLOW_VULNERABILITIES JSON map of repository names to booleans.
-    required: false
-    default: ""
-  misconfiguration_policy:
-    description: Organization ALLOW_MISSCONFIGURATIONS JSON map of repository names to booleans.
+  finding_policy:
+    description: Organization TRIVY_FINDING_POLICY JSON with expiring vulnerability and misconfiguration exceptions.
     required: false
     default: ""
 
@@ -287,8 +283,7 @@ runs:
       with:
         dockerfile_path: ${{ inputs.dockerfile_path }}
         trivy_server: ${{ inputs.trivy_server }}
-        vulnerability_policy: ${{ inputs.vulnerability_policy }}
-        misconfiguration_policy: ${{ inputs.misconfiguration_policy }}
+        finding_policy: ${{ inputs.finding_policy }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
         commit_author_name: ${{ steps.commit_author.outputs.name }}
 
@@ -301,8 +296,7 @@ runs:
       uses: svtechnmaa/.github/actions/trivy-image-scan@main
       with:
         trivy_server: ${{ inputs.trivy_server }}
-        vulnerability_policy: ${{ inputs.vulnerability_policy }}
-        misconfiguration_policy: ${{ inputs.misconfiguration_policy }}
+        finding_policy: ${{ inputs.finding_policy }}
         image_name: ${{ env.IMAGE_NAME }}
         image_tag: ${{ steps.prepare.outputs.commit_short_id }}
         commit_id: ${{ env.COMMIT_FULL_ID }}
