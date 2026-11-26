@@ -2,10 +2,10 @@
 
 Use this action as the **last step** of an ordinary build job, after health checks,
 image pushes, and any other required work. It intentionally fails an otherwise
-successful job when `trivy-report` found only explicitly allowed vulnerabilities.
+successful job when `trivy-report` found only explicitly allowed findings.
 The job stays red for visibility; `check_job_results` can accept its bypass output.
-The report gate must be the updated vulnerability-only policy: misconfigurations,
-secrets, and scan failures always block.
+The report gate must allow vulnerabilities and misconfigurations independently;
+secrets and scan failures always block.
 
 | Input | Source |
 | --- | --- |

@@ -14,7 +14,7 @@ if [[ "$JOB_STATUS" != 'success' ]]; then
   if [[ "$REPORT_OUTCOME" == 'failure' && "$GATE_FAILED" == 'true' ]]; then
     record_status 'NO BUILD BYPASS — SCAN GATE BLOCKED' 'The scan report contains blocking results. See its Blocking column and per-finding gate decisions. No build failure is exempted.'
   else
-    record_status 'NO BUILD BYPASS — JOB FAILED OR CANCELLED' 'Earlier build work did not succeed. Allowed vulnerabilities cannot exempt other failures.'
+    record_status 'NO BUILD BYPASS — JOB FAILED OR CANCELLED' 'Earlier build work did not succeed. Allowed findings cannot exempt other failures.'
   fi
   echo '::error::The job failed or was cancelled before the final Trivy status check. No bypass is permitted.'
   exit 1
@@ -46,11 +46,11 @@ if [[ "$GATE_FAILED" == 'true' ]]; then
 fi
 
 if [[ "$FINDING_COUNT" != '0' ]]; then
-  # The updated report gate permits findings only for allowed vulnerabilities.
+  # The report gate permits only explicitly allowed vulnerabilities or misconfigurations.
   # This is the last build step: all actual build work must finish before here.
-  record_status 'BUILD BYPASS APPLIED — ALLOWED VULNERABILITIES ONLY' 'All preceding build work succeeded. The build is intentionally red for visibility; check_job_results may accept this failure. Other job failures still block.'
+  record_status 'BUILD BYPASS APPLIED — ALLOWED TRIVY FINDINGS' 'All preceding build work succeeded. The build is intentionally red for visibility; check_job_results may accept this failure. Other job failures still block.'
   echo 'scan_bypassed=true' >> "$GITHUB_OUTPUT"
-  echo '::error title=Allowed Trivy vulnerabilities::Vulnerabilities were explicitly allowed. This job is intentionally red for visibility; check_job_results may accept this failure.'
+  echo '::error title=Allowed Trivy findings::Findings were explicitly allowed. This job is intentionally red for visibility; check_job_results may accept this failure.'
   exit 1
 fi
 

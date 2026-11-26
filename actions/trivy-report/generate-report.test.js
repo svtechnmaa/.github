@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { generateReport } = require('./generate-report');
 
-function run(scans) {
+function run(scans, runAttempt = '1') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trivy-report-test-'));
   const reportDir = path.join(root, 'reports');
   fs.mkdirSync(reportDir);
@@ -23,7 +23,7 @@ function run(scans) {
       GITHUB_OUTPUT: output,
       GITHUB_STEP_SUMMARY: summary,
       GITHUB_RUN_ID: '123',
-      GITHUB_RUN_ATTEMPT: '1',
+      GITHUB_RUN_ATTEMPT: runAttempt,
       GITHUB_REPOSITORY: 'svtechnmaa/svtech_report',
       GITHUB_SERVER_URL: 'https://github.com',
     }, root);
@@ -50,7 +50,7 @@ test('combines repeated scans and records secret count for downstream mail', () 
     { meta: { kind: 'dockerfile', target: './Dockerfile', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'Dockerfile', Vulnerabilities: [vulnerability] }] } },
     { meta: { kind: 'image', target: 'app:first', commit_id: '123456789abcdef', commit_author: 'Author', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Target: 'app:first', Secrets: [secret] }] } },
     { meta: { kind: 'image', target: 'app:second', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [] } },
-  ]);
+  ], '2');
   assert.equal(data.values.scan_count, '3');
   assert.equal(data.values.finding_count, '2');
   assert.equal(data.values.gate_failed, 'true');
@@ -65,13 +65,18 @@ test('combines repeated scans and records secret count for downstream mail', () 
   assert.match(data.summary, /## 3\. Findings/);
   assert.match(data.summary, /\[CVE-2026-1\]\(https:\/\/example\.com\/CVE-2026-1\)/);
   assert.match(data.summary, /Fixed in/);
-  assert.match(data.summary, /allow_vulnerabilities: true/);
+  assert.match(data.summary, /Secrets always block the Trivy scan gate/);
+  assert.doesNotMatch(data.summary, /allow_vulnerabilities/);
+  assert.match(data.summary, /actions\/runs\/123\/attempts\/2/);
+  assert.match(data.mail, /FULL REPORT \(ATTEMPT 2\): https:\/\/github\.com\/svtechnmaa\/svtech_report\/actions\/runs\/123\/attempts\/2/);
+  assert.match(data.htmlMail, /href="https:\/\/github\.com\/svtechnmaa\/svtech_report\/actions\/runs\/123\/attempts\/2"/);
+  assert.match(data.htmlMail, /<strong>Run attempt:<\/strong> 2/);
   assert.match(data.summary, /app:second/);
   assert.doesNotMatch(data.mail, /secret-rule/);
   assert.match(data.htmlMail, /<strong>3 scans/);
   assert.match(data.mailMetadata.subject, /\[TRIVY\]\[ACTION REQUIRED\]/);
   assert.match(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
-  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities/);
+  assert.match(data.htmlMail, /<strong>NOT BLOCKING<\/strong> applies only to allowed vulnerabilities or misconfigurations/);
   assert.match(data.summary, /Blocking secrets/);
   assert.match(data.mail, /BLOCKING SECRETS/);
   assert.match(data.htmlMail, /BLOCKING SECRETS/);
@@ -101,15 +106,94 @@ test('scan errors remain blocking even when allow_vulnerabilities is true', () =
   assert.match(data.htmlMail, /<strong>SCAN ERRORS<\/strong> means a scan did not finish/);
 });
 
-test('allowed vulnerabilities do not block merging', () => {
+test('allowed vulnerabilities do not block the scan gate', () => {
   const data = run([
     { meta: { kind: 'filesystem', target: 'changed files', allow_vulnerabilities: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability] }] } },
   ]);
   assert.equal(data.values.gate_failed, 'false');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-  assert.match(data.summary, /Findings allowed/);
+  assert.match(data.summary, /⚠️ Findings allowed/);
   assert.match(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
+});
+
+test('allowed misconfigurations remain visible without blocking the scan gate', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH', Title: 'Running as root' };
+  const data = run([{
+    meta: { kind: 'dockerfile', target: 'Dockerfile', allow_misconfigurations: true, scan_ok: true },
+    report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'false');
+  assert.equal(data.values.send_mail, 'true');
+  assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
+  assert.match(data.summary, /Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 1 \| 0/);
+  assert.match(data.summary, /AVD-DS-0002/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
+  assert.match(data.mail, /ALLOWED MISCONFIGURATIONS: 1/);
+  assert.match(data.htmlMail, /1 allowed · 0 blocking/);
+});
+
+test('expired exceptions explain why formerly allowed findings now block', () => {
+  const data = run([{
+    meta: {
+      kind: 'dockerfile', target: 'Dockerfile', scan_ok: true,
+      allow_vulnerabilities: false, allow_misconfigurations: false,
+      exception_details: {
+        vulnerabilities: { status: 'expired', expires_at: '2027-01-31', description: 'Dependency upgrade pending' },
+        misconfigurations: { status: 'expired', expires_at: '2027-02-28', description: 'Dockerfile hardening <pending>' },
+      },
+    },
+    report: { SchemaVersion: 2, Results: [{ Vulnerabilities: [vulnerability], Misconfigurations: [{ ID: 'AVD-DS-0002', Severity: 'HIGH' }] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.match(data.summary, /EXCEPTION EXPIRED AFTER 2027-01-31 — BLOCKING/);
+  assert.match(data.summary, /EXCEPTION EXPIRED AFTER 2027-02-28 — BLOCKING/);
+  assert.match(data.summary, /Dockerfile hardening &lt;pending&gt;/);
+  assert.match(data.mail, /Expired after 2027-02-28 \(Vietnam time\)/);
+  assert.match(data.htmlMail, /Dockerfile hardening &lt;pending&gt;/);
+  assert.doesNotMatch(data.htmlMail, /Dockerfile hardening <pending>/);
+});
+
+test('active exception reports its expiration and reason without hiding findings', () => {
+  const data = run([{
+    meta: {
+      kind: 'dockerfile', target: 'Dockerfile', scan_ok: true, allow_misconfigurations: true,
+      exception_details: { misconfigurations: { status: 'active', expires_at: '2099-12-31', description: 'Pending hardening' } },
+    },
+    report: { SchemaVersion: 2, Results: [{ Misconfigurations: [{ ID: 'AVD-DS-0002', Severity: 'HIGH' }] }] },
+  }]);
+  assert.equal(data.values.gate_failed, 'false');
+  assert.match(data.summary, /Allowed through 2099-12-31 \(Vietnam time\): Pending hardening/);
+  assert.match(data.htmlMail, /Allowed through 2099-12-31 \(Vietnam time\): Pending hardening/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
+});
+
+test('allowed misconfigurations never bypass secrets, disallowed vulnerabilities, or scan errors', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH' };
+  for (const item of [
+    { findings: { Misconfigurations: [misconfiguration], Secrets: [secret] } },
+    { findings: { Misconfigurations: [misconfiguration], Vulnerabilities: [vulnerability] } },
+    { findings: { Misconfigurations: [misconfiguration] }, scan_ok: false },
+  ]) {
+    const data = run([{
+      meta: { kind: 'dockerfile', allow_misconfigurations: true, scan_ok: item.scan_ok !== false },
+      report: { SchemaVersion: 2, Results: [item.findings] },
+    }]);
+    assert.equal(data.values.gate_failed, 'true');
+    assert.match(data.mailMetadata.subject, /\[(ACTION REQUIRED|SCAN FAILED)\]/);
+  }
+});
+
+test('misconfiguration permission applies only to the scan with that policy', () => {
+  const misconfiguration = { ID: 'AVD-DS-0002', Severity: 'HIGH' };
+  const data = run([
+    { meta: { kind: 'dockerfile', target: 'backend/Dockerfile', allow_misconfigurations: true, scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] } },
+    { meta: { kind: 'dockerfile', target: 'frontend/Dockerfile', scan_ok: true }, report: { SchemaVersion: 2, Results: [{ Misconfigurations: [misconfiguration] }] } },
+  ]);
+  assert.equal(data.values.gate_failed, 'true');
+  assert.match(data.summary, /Misconfigurations \(HIGH, CRITICAL\) \| 2 \| 1 \| 1/);
+  assert.match(data.mail, /ALLOWED MISCONFIGURATIONS: 1/);
+  assert.match(data.mail, /BLOCKING MISCONFIGURATIONS: 1/);
 });
 
 for (const kind of ['filesystem', 'dockerfile', 'image']) {
@@ -134,12 +218,12 @@ for (const kind of ['filesystem', 'dockerfile', 'image']) {
         assert.equal(data.values.finding_count, String(Number(hasVulnerability) + Number(hasMisconfiguration) + Number(hasSecret)));
         if (blocking) {
           assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
-          assert.doesNotMatch(data.summary, /Findings allowed/);
+          assert.doesNotMatch(data.summary, /⚠️ Findings allowed/);
           assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
           assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
         } else if (hasFindings) {
           assert.match(data.mailMetadata.subject, /\[FINDINGS FOUND\]/);
-          assert.match(data.summary, /Findings allowed/);
+          assert.match(data.summary, /⚠️ Findings allowed/);
         } else {
           assert.match(data.summary, /Clean/);
         }
@@ -160,7 +244,7 @@ test('secrets always block even in an allowed scan, with or without other findin
     assert.match(data.summary, /Blocking secrets/);
     assert.match(data.mail, /BLOCKING SECRETS/);
     assert.match(data.htmlMail, /BLOCKING SECRETS/);
-    assert.doesNotMatch(data.summary, /Findings allowed/);
+    assert.doesNotMatch(data.summary, /⚠️ Findings allowed/);
     assert.doesNotMatch(data.mail, /REVIEW REQUIRED — NOT BLOCKING/);
     assert.doesNotMatch(data.htmlMail, /REVIEW REQUIRED — NOT BLOCKING/);
     for (const output of [data.summary, data.mail, data.htmlMail]) assert.doesNotMatch(output, /PRIVATE_SECRET_VALUE/);
@@ -175,9 +259,9 @@ test('allowed vulnerabilities in one scan cannot bypass misconfigurations in ano
   assert.equal(data.values.gate_failed, 'true');
   assert.equal(data.values.send_mail, 'true');
   assert.match(data.mailMetadata.subject, /\[ACTION REQUIRED\]/);
-  assert.match(data.summary, /Blocking misconfigurations/);
-  assert.match(data.mail, /BLOCKING MISCONFIGURATIONS/);
-  assert.match(data.htmlMail, /BLOCKING MISCONFIGURATIONS/);
+  assert.match(data.summary, /1 misconfigurations, 0 secrets/);
+  assert.match(data.mail, /BLOCKING FINDINGS/);
+  assert.match(data.htmlMail, /ACTION REQUIRED/);
 });
 
 test('invalid reports remain blocking even when scan metadata permits vulnerabilities', () => {
@@ -198,11 +282,11 @@ test('mixed scan reports distinguish allowed vulnerabilities from blocking misco
   assert.match(data.summary, /Scan gate: ❌ BLOCKED/);
   assert.match(data.summary, /\| 🛡️ Vulnerabilities \(HIGH, CRITICAL\) \| 2 \| 1 \| 1 \|/);
   assert.match(data.summary, /\| ⚙️ Misconfigurations \(HIGH, CRITICAL\) \| 1 \| 0 \| 1 \|/);
-  assert.match(data.summary, /\| backend \| true \| 1 \(1 allowed, 0 blocking\)/);
-  assert.match(data.summary, /\| frontend \| false \| 1 \(0 allowed, 1 blocking\)/);
-  assert.match(data.summary, /ALLOWED — allow_vulnerabilities=true/);
+  assert.match(data.summary, /\| backend \| Allowed \| Blocking by default \| 1 \(1 allowed, 0 blocking\)/);
+  assert.match(data.summary, /\| frontend \| Blocking by default \| Blocking by default \| 1 \(0 allowed, 1 blocking\)/);
+  assert.match(data.summary, /ALLOWED BY SCAN POLICY/);
   assert.match(data.summary, /❌ BLOCKING/);
-  assert.match(data.summary, /❌ ALWAYS BLOCKING/);
+  assert.match(data.summary, /❌ BLOCKING/);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 1/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
   assert.match(data.htmlMail, /1 allowed · 1 blocking/);
@@ -216,7 +300,7 @@ test('scan failures cannot present their vulnerability results as allowed', () =
   ]);
   assert.match(data.mail, /ALLOWED VULNERABILITIES: 0/);
   assert.match(data.mail, /BLOCKING VULNERABILITIES: 1/);
-  assert.doesNotMatch(data.summary, /ALLOWED — allow_vulnerabilities=true/);
+  assert.doesNotMatch(data.summary, /ALLOWED BY SCAN POLICY/);
 });
 
 test('missing results do not produce a clean report', () => {

@@ -17,7 +17,8 @@ function findings(report, key) {
 }
 
 function blocksMerge(scan) {
-  return !scan.scanOk || scan.secrets.length > 0 || scan.misconfigurations.length > 0
+  return !scan.scanOk || scan.secrets.length > 0
+    || (!scan.allowMisconfigurations && scan.misconfigurations.length > 0)
     || (!scan.allowVulnerabilities && scan.vulnerabilities.length > 0);
 }
 
@@ -25,9 +26,34 @@ function allowedVulnerabilities(scan) {
   return scan.scanOk && scan.allowVulnerabilities ? scan.vulnerabilities.length : 0;
 }
 
+function allowedMisconfigurations(scan) {
+  return scan.scanOk && scan.allowMisconfigurations ? scan.misconfigurations.length : 0;
+}
+
 function vulnerabilityCounts(scan) {
   const allowed = allowedVulnerabilities(scan);
   return `${scan.vulnerabilities.length} (${allowed} allowed, ${scan.vulnerabilities.length - allowed} blocking)`;
+}
+
+function misconfigurationCounts(scan) {
+  const allowed = allowedMisconfigurations(scan);
+  return `${scan.misconfigurations.length} (${allowed} allowed, ${scan.misconfigurations.length - allowed} blocking)`;
+}
+
+function exceptionLabel(scan, category) {
+  const detail = scan.exceptionDetails?.[category];
+  if (detail?.status === 'expired') return `Expired after ${detail.expires_at} (Vietnam time): ${detail.description}`;
+  if (detail?.status === 'active') return `Allowed through ${detail.expires_at} (Vietnam time): ${detail.description}`;
+  const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
+  return allowed ? 'Allowed' : 'Blocking by default';
+}
+
+function findingDecision(scan, category) {
+  const detail = scan.exceptionDetails?.[category];
+  if (!scan.scanOk) return '❌ SCAN FAILED — NOT ALLOWED';
+  if (detail?.status === 'expired') return `❌ EXCEPTION EXPIRED AFTER ${detail.expires_at} — BLOCKING`;
+  const allowed = category === 'vulnerabilities' ? scan.allowVulnerabilities : scan.allowMisconfigurations;
+  return allowed ? '⚠️ ALLOWED BY SCAN POLICY' : '❌ BLOCKING';
 }
 
 function clean(value) {
@@ -66,7 +92,7 @@ const mailDetailsPath = path.join(mailDir, 'trivy-mail-details.json');
 const runId = env.GITHUB_RUN_ID || 'local';
 const runAttempt = env.GITHUB_RUN_ATTEMPT || '1';
 const reportDir = env.REPORT_DIR || path.join(env.RUNNER_TEMP || '.', 'trivy-collect', `${runId}-${runAttempt}`);
-const runUrl = `${env.GITHUB_SERVER_URL || 'https://github.com'}/${env.GITHUB_REPOSITORY || ''}/actions/runs/${runId}`;
+const runUrl = `${env.GITHUB_SERVER_URL || 'https://github.com'}/${env.GITHUB_REPOSITORY || ''}/actions/runs/${runId}/attempts/${runAttempt}`;
 const scans = findMetadata(reportDir).sort().map((metadataPath) => {
   const meta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
   const reportPath = path.join(path.dirname(metadataPath), 'report.json');
@@ -92,6 +118,8 @@ const scans = findMetadata(reportDir).sort().map((metadataPath) => {
     commitId: meta.commit_id || '',
     commitAuthor: meta.commit_author || '',
     allowVulnerabilities: meta.allow_vulnerabilities === true,
+    allowMisconfigurations: meta.allow_misconfigurations === true,
+    exceptionDetails: meta.exception_details && typeof meta.exception_details === 'object' ? meta.exception_details : {},
     scanOk: (meta.scan_succeeded ?? meta.scan_ok) === true && validReport,
     vulnerabilities, secrets, misconfigurations,
   };
@@ -107,12 +135,14 @@ if (scans.length === 0) totals.failures = 1;
 const totalFindings = totals.vulnerabilities + totals.secrets + totals.misconfigurations;
 const allowedVulnerabilityCount = scans.reduce((sum, scan) => sum + allowedVulnerabilities(scan), 0);
 const blockingVulnerabilityCount = totals.vulnerabilities - allowedVulnerabilityCount;
+const allowedMisconfigurationCount = scans.reduce((sum, scan) => sum + allowedMisconfigurations(scan), 0);
+const blockingMisconfigurationCount = totals.misconfigurations - allowedMisconfigurationCount;
 const gateFailed = totals.failures > 0 || scans.some(blocksMerge);
 const status = totals.failures ? '⚠️ Scan failed' : totalFindings ? '❌ Issues found' : '✅ Clean';
 const mailStatus = totals.failures ? 'SCAN FAILED' : gateFailed ? 'ACTION REQUIRED' : totalFindings ? 'FINDINGS FOUND' : 'CLEAN';
 const highlightedScans = scans.filter((scan) => !scan.scanOk || scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length > 0);
 const cleanScans = scans.length - highlightedScans.length;
-const hasNonBlockingFindings = scans.some((scan) => scan.scanOk && scan.allowVulnerabilities && scan.vulnerabilities.length > 0);
+const hasNonBlockingFindings = allowedVulnerabilityCount + allowedMisconfigurationCount > 0;
 const commitIds = [...new Set(scans.map((scan) => scan.commitId).filter((value) => /^[0-9a-f]{7,40}$/i.test(value)))];
 const commitId = commitIds.length === 1 ? commitIds[0] : '';
 const commitAuthor = [...new Set(scans.map((scan) => scan.commitAuthor).filter(Boolean))].join(', ');
@@ -120,7 +150,7 @@ const commitUrl = `${env.GITHUB_SERVER_URL || 'https://github.com'}/${env.GITHUB
 const context = [`**Repository:** ${markdown(env.GITHUB_REPOSITORY || '')}`];
 if (commitId) context.push(`**Commit:** [\`${commitId.slice(0, 7)}\`](${commitUrl})`);
 if (commitAuthor) context.push(`**Author:** ${markdown(commitAuthor)}`);
-context.push(`**Run:** [#${runId}](${runUrl})`);
+context.push(`**Run:** [#${runId} · attempt ${runAttempt}](${runUrl})`);
 
 const summary = [
   `# 🔍 Trivy — ${status}`,
@@ -134,19 +164,19 @@ const summary = [
   markdownTable(['Category', 'Total', 'Allowed', 'Blocking'], [
     ['🔑 Secrets (HIGH, CRITICAL)', totals.secrets, 0, totals.secrets],
     ['🛡️ Vulnerabilities (HIGH, CRITICAL)', totals.vulnerabilities, allowedVulnerabilityCount, blockingVulnerabilityCount],
-    ['⚙️ Misconfigurations (HIGH, CRITICAL)', totals.misconfigurations, 0, totals.misconfigurations],
+    ['⚙️ Misconfigurations (HIGH, CRITICAL)', totals.misconfigurations, allowedMisconfigurationCount, blockingMisconfigurationCount],
     ['⚠️ Scan failures', totals.failures, 0, totals.failures],
   ]),
-  `**Blocking reasons:** ${blockingVulnerabilityCount} vulnerabilities, ${totals.misconfigurations} misconfigurations, ${totals.secrets} secrets, ${totals.failures} scan failures.`,
-  `**Allowed vulnerabilities:** ${allowedVulnerabilityCount}. Allowed findings do not override other blocking results.`,
+  `**Blocking reasons:** ${blockingVulnerabilityCount} vulnerabilities, ${blockingMisconfigurationCount} misconfigurations, ${totals.secrets} secrets, ${totals.failures} scan failures.`,
+  `**Allowed findings:** ${allowedVulnerabilityCount} vulnerabilities, ${allowedMisconfigurationCount} misconfigurations. They do not override other blocking results.`,
   `**Scans:** ${scans.length} · **Clean:** ${cleanScans} · **Total findings:** ${totalFindings}`,
   '',
   '## 2. Scanned targets',
   '',
-  markdownTable(['Type', 'Target', 'allow_vulnerabilities', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations (blocking)', 'Result'], scans.map((scan) => {
+  markdownTable(['Type', 'Target', 'Vulnerability policy', 'Misconfiguration policy', 'Vulnerabilities', 'Secrets (blocking)', 'Misconfigurations', 'Result'], scans.map((scan) => {
     const count = scan.vulnerabilities.length + scan.secrets.length + scan.misconfigurations.length;
-    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : scan.misconfigurations.length > 0 ? '❌ Blocking misconfigurations' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed (`allow_vulnerabilities: true`)';
-    return [markdown(scan.kind), markdown(scan.target), String(scan.allowVulnerabilities), vulnerabilityCounts(scan), scan.secrets.length, scan.misconfigurations.length, result];
+    const result = !scan.scanOk ? '⚠️ Scan failed' : count === 0 ? '✅ Clean' : scan.secrets.length > 0 ? '❌ Blocking secrets' : blocksMerge(scan) ? '❌ Blocking findings' : '⚠️ Findings allowed';
+    return [markdown(scan.kind), markdown(scan.target), markdown(exceptionLabel(scan, 'vulnerabilities')), markdown(exceptionLabel(scan, 'misconfigurations')), vulnerabilityCounts(scan), scan.secrets.length, misconfigurationCounts(scan), result];
   })),
 ];
 if (!scans.length) summary.push('No scan results were collected. Check the scan steps.', '');
@@ -155,7 +185,7 @@ if (totalFindings > 0) summary.push('## 3. Findings', '');
 const vulnerabilityRows = scans.flatMap((scan) => scan.vulnerabilities.map((finding) => [
   markdown(scan.target), markdown(finding.Severity), findingLink(finding.VulnerabilityID || 'Unknown', finding.PrimaryURL),
   markdown(finding.PkgName), markdown(finding.InstalledVersion), markdown(finding.FixedVersion), markdown(finding.target),
-  allowedVulnerabilities(scan) > 0 ? '⚠️ ALLOWED — allow_vulnerabilities=true' : '❌ BLOCKING',
+  findingDecision(scan, 'vulnerabilities'),
 ]));
 if (vulnerabilityRows.length) {
   summary.push(`### 🛡️ Vulnerabilities (${vulnerabilityRows.length})`, '', `<details><summary>View all ${vulnerabilityRows.length} vulnerability finding(s)</summary>`, '',
@@ -164,7 +194,7 @@ if (vulnerabilityRows.length) {
 const misconfigurationRows = scans.flatMap((scan) => scan.misconfigurations.map((finding) => [
   markdown(scan.target), markdown(finding.Severity), findingLink(finding.ID || 'Unknown', finding.PrimaryURL),
   markdown(finding.Title), markdown(finding.target), markdown(finding.CauseMetadata?.StartLine), markdown(finding.Resolution),
-  '❌ ALWAYS BLOCKING',
+  findingDecision(scan, 'misconfigurations'),
 ]));
 if (misconfigurationRows.length) {
   summary.push(`### ⚙️ Misconfigurations (${misconfigurationRows.length})`, '', `<details><summary>View all ${misconfigurationRows.length} misconfiguration finding(s)</summary>`, '',
@@ -188,17 +218,17 @@ if (totalFindings > 0 || totals.failures > 0) {
   if (totals.misconfigurations) actions.push('Apply the reported **Resolution** to the affected file and line.');
   summary.push(...actions.map((action, index) => `${index + 1}. ${action}`), '');
   if (hasNonBlockingFindings) {
-    summary.push('**Note:** With `allow_vulnerabilities: true`, vulnerabilities are reported but do not fail the scan gate. Misconfigurations, secrets, and scan failures always block.', '');
+    summary.push('**Note:** Allowed vulnerabilities and misconfigurations remain visible but do not fail the Trivy scan gate. Secrets and scan failures always block.', '');
   }
 }
-if (totals.secrets) summary.push('**Secrets always block merging, including when `allow_vulnerabilities: true`.**', '');
+if (totals.secrets) summary.push('**Secrets always block the Trivy scan gate.**', '');
 fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary.join('\n')}\n`);
 
 const body = [
   `TRIVY SCAN — ${mailStatus}`,
   `REPOSITORY: ${env.GITHUB_REPOSITORY || ''}`,
   ...(commitId ? [`COMMIT: ${commitUrl}`] : []),
-  `FULL REPORT: ${runUrl}`,
+  `FULL REPORT (ATTEMPT ${runAttempt}): ${runUrl}`,
   '',
   'FINDINGS SUMMARY',
   `SCAN GATE: ${gateFailed ? 'BLOCKED' : 'PASSED'}`,
@@ -209,17 +239,19 @@ const body = [
   `SCAN ERRORS: ${totals.failures}`,
   `ALLOWED VULNERABILITIES: ${allowedVulnerabilityCount}`,
   `BLOCKING VULNERABILITIES: ${blockingVulnerabilityCount}`,
-  'Misconfigurations, secrets, and scan errors always block. Allowed vulnerabilities do not override these blockers.',
+  `ALLOWED MISCONFIGURATIONS: ${allowedMisconfigurationCount}`,
+  `BLOCKING MISCONFIGURATIONS: ${blockingMisconfigurationCount}`,
+  'Secrets and scan errors always block. Allowed findings do not override other blocking results.',
   '',
   'SCANS NEEDING ATTENTION',
   ...highlightedScans.map((scan) => {
-    const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
-    return `${scan.kind.toUpperCase()}: ${scan.target} — allow_vulnerabilities=${scan.allowVulnerabilities}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, blocking misconfigurations: ${scan.misconfigurations.length} (${result})`;
+    const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'BLOCKING FINDINGS' : 'REVIEW REQUIRED — NOT BLOCKING';
+    return `${scan.kind.toUpperCase()}: ${scan.target} — vulnerability policy: ${exceptionLabel(scan, 'vulnerabilities')}; misconfiguration policy: ${exceptionLabel(scan, 'misconfigurations')}; vulnerabilities: ${vulnerabilityCounts(scan)}, blocking secrets: ${scan.secrets.length}, misconfigurations: ${misconfigurationCounts(scan)} (${result})`;
   }),
   ...(!highlightedScans.length ? ['None'] : []),
   ...(totals.failures ? ['', 'SCAN ERRORS means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.'] : []),
-  ...(hasNonBlockingFindings ? ['', 'NOT BLOCKING applies only to allowed vulnerabilities. They still need review and remediation.'] : []),
-  ...(totals.secrets ? ['', 'Secrets always block merging, even when other findings are allowed.'] : []),
+  ...(hasNonBlockingFindings ? ['', 'NOT BLOCKING applies only to allowed vulnerabilities or misconfigurations. They still need review and remediation.'] : []),
+  ...(totals.secrets ? ['', 'Secrets always block the Trivy scan gate.'] : []),
   '',
   'Open the workflow run Summary for CVEs, affected packages, fixed versions, files, and remediation details.',
   'Secret values are never included in this email.',
@@ -230,24 +262,24 @@ const accent = totals.failures ? '#b42318' : gateFailed ? '#c2410c' : totalFindi
 const cards = [
   ['VULNERABILITIES', totals.vulnerabilities, `${allowedVulnerabilityCount} allowed · ${blockingVulnerabilityCount} blocking`],
   ['SECRETS', totals.secrets, `${totals.secrets} blocking`],
-  ['MISCONFIGURATIONS', totals.misconfigurations, `${totals.misconfigurations} blocking`],
+  ['MISCONFIGURATIONS', totals.misconfigurations, `${allowedMisconfigurationCount} allowed · ${blockingMisconfigurationCount} blocking`],
   ['SCAN ERRORS', totals.failures, `${totals.failures} blocking`],
 ].map(([label, count, decision]) => `<td style="padding:12px;border:1px solid #d0d7de;text-align:center"><div style="font-size:12px;font-weight:700;color:#57606a">${label}</div><div style="font-size:26px;font-weight:700;color:${count ? accent : '#24292f'}">${count}</div><div style="font-size:12px">${decision}</div></td>`).join('');
 const rows = highlightedScans.map((scan) => {
-  const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : scan.misconfigurations.length > 0 ? 'BLOCKING MISCONFIGURATIONS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
-  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Allow vulnerabilities: ${scan.allowVulnerabilities}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.misconfigurations.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
+  const result = !scan.scanOk ? 'SCAN FAILED' : scan.secrets.length > 0 ? 'BLOCKING SECRETS' : blocksMerge(scan) ? 'ACTION REQUIRED' : 'REVIEW REQUIRED — NOT BLOCKING';
+  return `<tr><td style="padding:10px;border-bottom:1px solid #d0d7de"><strong>${html(scan.kind.toUpperCase())}</strong><br>${html(scan.target)}<br><span style="font-size:12px">Vulnerability policy: ${html(exceptionLabel(scan, 'vulnerabilities'))}<br>Misconfiguration policy: ${html(exceptionLabel(scan, 'misconfigurations'))}</span></td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${vulnerabilityCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${scan.secrets.length}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;text-align:center">${misconfigurationCounts(scan)}</td><td style="padding:10px;border-bottom:1px solid #d0d7de;color:${accent};font-weight:700">${result}</td></tr>`;
 }).join('');
 const htmlBody = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#24292f;line-height:1.5;max-width:760px;margin:0 auto;padding:24px">
-<div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>
+<div style="border-left:6px solid ${accent};padding:12px 18px;background:#f6f8fa"><div style="font-size:12px;font-weight:700;color:${accent}">TRIVY SECURITY SCAN</div><h1 style="font-size:24px;margin:4px 0;color:${accent}">${mailStatus}</h1><div><strong>Repository:</strong> ${html(env.GITHUB_REPOSITORY || '')}</div><div><strong>Run attempt:</strong> ${html(runAttempt)}</div>${commitId ? `<div><strong>Commit:</strong> <a href="${html(commitUrl)}">${commitId.slice(0, 7)}</a></div>` : ''}</div>
 <h2 style="font-size:17px;margin-top:28px">FINDINGS SUMMARY</h2><p><strong>${scans.length} scans</strong> completed or attempted · <strong>${cleanScans} clean</strong></p>
 <p><strong>SCAN GATE: ${gateFailed ? 'BLOCKED' : 'PASSED'}</strong></p>
 <table style="border-collapse:collapse;width:100%"><tr>${cards}</tr></table>
-<p>Misconfigurations, secrets, and scan errors always block. Allowed vulnerabilities do not override these blockers.</p>
+<p>Secrets and scan errors always block. Allowed findings do not override other blocking results.</p>
 ${totals.failures ? '<p style="padding:12px;background:#ffebe9"><strong>SCAN ERRORS</strong> means a scan did not finish or produced no readable report. Results may be incomplete; check the scan logs and rerun.</p>' : ''}
 <h2 style="font-size:17px;margin-top:28px">SCANS NEEDING ATTENTION</h2>
 ${highlightedScans.length ? `<table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f6f8fa;text-align:left"><th style="padding:10px 14px">TARGET</th><th style="padding:10px 14px">VULNS</th><th style="padding:10px 14px">SECRETS</th><th style="padding:10px 14px">MISCONFIGS</th><th style="padding:10px 14px">STATUS</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>None.</p>'}
-${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> applies only to allowed vulnerabilities. They still need review and remediation.</p>' : ''}
-${totals.secrets ? '<p style="padding:12px;background:#ffebe9"><strong>Secrets always block merging</strong>, even when other findings are allowed.</p>' : ''}
+${hasNonBlockingFindings ? '<p style="padding:12px;background:#fff8c5"><strong>NOT BLOCKING</strong> applies only to allowed vulnerabilities or misconfigurations. They still need review and remediation.</p>' : ''}
+${totals.secrets ? '<p style="padding:12px;background:#ffebe9"><strong>Secrets always block the Trivy scan gate.</strong></p>' : ''}
 <p style="margin-top:28px"><a href="${html(runUrl)}" style="display:inline-block;padding:12px 18px;background:#0969da;color:#fff;text-decoration:none;font-weight:700;border-radius:6px">OPEN FULL GITHUB SUMMARY</a></p>
 <p style="font-size:13px;color:#57606a">The Summary includes CVEs, affected packages, fixed versions, files, and remediation details. Secret values are not included in this email.</p>
 </body></html>`;

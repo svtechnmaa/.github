@@ -14,14 +14,21 @@ inputs:
     description: Comma-separated Trivy scanners to enable.
     required: false
     default: secret,misconfig,vuln
-  allow_vulnerabilities:
-    description: Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail.
+  finding_policy:
+    description: Organization TRIVY_FINDING_POLICY JSON with expiring vulnerability and misconfiguration exceptions.
     required: false
-    default: "false"
+    default: ""
 
 runs:
   using: composite
   steps:
+    - name: Resolve repository finding policy
+      id: finding_policy
+      shell: bash
+      env:
+        TRIVY_FINDING_POLICY_JSON: ${{ inputs.finding_policy }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/resolve-trivy-finding-policy.sh"
+
     - name: Update Helm dependencies
       shell: bash
       run: |
@@ -117,7 +124,9 @@ runs:
         HAS_SCOPE: ${{ steps.prepare_scope.outputs.has_scope }}
         PREPARE_OUTCOME: ${{ steps.prepare_scope.outcome }}
         SCAN_OUTCOME: ${{ steps.scan_files.outcome }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
+        ALLOW_VULNERABILITIES: ${{ steps.finding_policy.outputs.allow_vulnerabilities }}
+        ALLOW_MISCONFIGURATIONS: ${{ steps.finding_policy.outputs.allow_misconfigurations }}
+        EXCEPTION_DETAILS: ${{ steps.finding_policy.outputs.exception_details }}
         SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         SCAN_AUTHOR: ${{ github.actor }}
       run: |
@@ -134,5 +143,7 @@ runs:
         elif [ "$SCAN_OUTCOME" = "success" ] && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' trivy-fs.json >/dev/null 2>&1; then
           scan_ok=true
         fi
-        jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"
+        exception_details="$EXCEPTION_DETAILS"
+        if [ -z "$exception_details" ]; then exception_details='{}'; fi
+        jq -n --arg kind filesystem --arg target "changed files in pull request" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg allow_misconfigurations "$ALLOW_MISCONFIGURATIONS" --argjson exceptions "$exception_details" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),allow_misconfigurations:($allow_misconfigurations == "true"),exception_details:$exceptions,scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"

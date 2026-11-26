@@ -41,7 +41,7 @@ test('only an otherwise successful job with allowed findings is intentionally fa
   const result = finalize({});
   assert.equal(result.code, 1);
   assert.equal(result.bypassed, 'true');
-  assert.match(result.summary, /BUILD BYPASS APPLIED — ALLOWED VULNERABILITIES ONLY/);
+  assert.match(result.summary, /BUILD BYPASS APPLIED — ALLOWED TRIVY FINDINGS/);
   assert.equal(check({ build: { result: 'failure', outputs: { scan_bypassed: result.bypassed } } }).code, 0);
 });
 
@@ -105,12 +105,16 @@ test('invalid needs JSON cannot silently pass', () => {
   }
 });
 
-test('real report outputs bypass only allowed vulnerabilities, never secrets, misconfigurations or scan errors', () => {
+test('real report outputs bypass only allowed findings, never secrets or scan errors', () => {
   const vulnerability = { VulnerabilityID: 'CVE-TEST', Severity: 'HIGH' };
   const secret = { RuleID: 'TEST', Severity: 'HIGH' };
   const misconfiguration = { ID: 'AVD-TEST', Severity: 'HIGH' };
   const cases = [
     { ignore: true, findings: { Vulnerabilities: [vulnerability] }, allowed: true },
+    { allowMisconfigurations: true, findings: { Misconfigurations: [misconfiguration] }, allowed: true },
+    { ignore: true, allowMisconfigurations: true, findings: { Vulnerabilities: [vulnerability], Misconfigurations: [misconfiguration] }, allowed: true },
+    { allowMisconfigurations: true, findings: { Vulnerabilities: [vulnerability], Misconfigurations: [misconfiguration] } },
+    { allowMisconfigurations: true, findings: { Secrets: [secret], Misconfigurations: [misconfiguration] } },
     { ignore: false, findings: { Vulnerabilities: [vulnerability] } },
     { ignore: true, findings: { Secrets: [secret] } },
     { ignore: true, findings: { Misconfigurations: [misconfiguration] } },
@@ -124,7 +128,7 @@ test('real report outputs bypass only allowed vulnerabilities, never secrets, mi
     try {
       const dir = path.join(root, 'reports', 'scan');
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ kind: 'image', scan_ok: item.scanOk !== false, allow_vulnerabilities: item.ignore }));
+      fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ kind: 'image', scan_ok: item.scanOk !== false, allow_vulnerabilities: item.ignore, allow_misconfigurations: item.allowMisconfigurations }));
       fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify({ SchemaVersion: 2, Results: [item.findings] }));
       const outputs = generateReport({ REPORT_DIR: path.dirname(dir), GITHUB_OUTPUT: path.join(root, 'output'), GITHUB_STEP_SUMMARY: path.join(root, 'summary') }, root);
       const result = finalize({ FINDING_COUNT: String(outputs.finding_count), GATE_FAILED: String(outputs.gate_failed), REPORT_OUTCOME: outputs.gate_failed ? 'failure' : 'success' });

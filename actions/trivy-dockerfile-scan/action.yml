@@ -10,10 +10,10 @@ inputs:
     description: "Trivy server URL (if using server mode)"
     required: false
     default: ""
-  allow_vulnerabilities:
-    description: "Allow vulnerability findings. Misconfigurations, secrets, and scan errors always fail."
+  finding_policy:
+    description: "Organization TRIVY_FINDING_POLICY JSON with expiring vulnerability and misconfiguration exceptions."
     required: false
-    default: "false"
+    default: ""
   commit_author_name:
     description: "Name of the commit author to include in the collected scan metadata"
     required: true
@@ -24,6 +24,13 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Resolve repository finding policy
+      id: finding_policy
+      shell: bash
+      env:
+        TRIVY_FINDING_POLICY_JSON: ${{ inputs.finding_policy }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/resolve-trivy-finding-policy.sh"
+
     - name: Scan Dockerfile build context
       id: scan_dockerfile
       shell: bash
@@ -72,7 +79,9 @@ runs:
         SCAN_TARGET: ${{ inputs.dockerfile_path }}
         SCAN_COMMIT: ${{ inputs.commit_id }}
         SCAN_AUTHOR: ${{ inputs.commit_author_name }}
-        ALLOW_VULNERABILITIES: ${{ inputs.allow_vulnerabilities }}
+        ALLOW_VULNERABILITIES: ${{ steps.finding_policy.outputs.allow_vulnerabilities }}
+        ALLOW_MISCONFIGURATIONS: ${{ steps.finding_policy.outputs.allow_misconfigurations }}
+        EXCEPTION_DETAILS: ${{ steps.finding_policy.outputs.exception_details }}
         SCAN_OUTCOME: ${{ steps.scan_dockerfile.outcome }}
       run: |
         report_dir="${RUNNER_TEMP}/trivy-collect/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -80,5 +89,7 @@ runs:
         scan_result_dir="$(mktemp -d "$report_dir/scan.XXXXXXXX")"
         if [ -f trivy-report.json ]; then cp trivy-report.json "$scan_result_dir/report.json"; fi
         if [ "$SCAN_OUTCOME" = "success" ] && [ -s trivy-report.json ] && jq -e 'type == "object" and has("SchemaVersion") and ((has("Results") | not) or (.Results == null) or (.Results | type == "array"))' trivy-report.json >/dev/null 2>&1; then scan_ok=true; else scan_ok=false; fi
-        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg ok "$scan_ok" \
-          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"
+        exception_details="$EXCEPTION_DETAILS"
+        if [ -z "$exception_details" ]; then exception_details='{}'; fi
+        jq -n --arg kind dockerfile --arg target "$SCAN_TARGET" --arg commit "$SCAN_COMMIT" --arg author "$SCAN_AUTHOR" --arg allow "$ALLOW_VULNERABILITIES" --arg allow_misconfigurations "$ALLOW_MISCONFIGURATIONS" --argjson exceptions "$exception_details" --arg ok "$scan_ok" \
+          '{kind:$kind,target:$target,commit_id:$commit,commit_author:$author,allow_vulnerabilities:($allow == "true"),allow_misconfigurations:($allow_misconfigurations == "true"),exception_details:$exceptions,scan_succeeded:($ok == "true")}' > "$scan_result_dir/meta.json"
